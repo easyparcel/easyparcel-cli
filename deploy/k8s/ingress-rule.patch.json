@@ -1,0 +1,23 @@
+[
+  {
+    "op": "add",
+    "path": "/spec/rules/-",
+    "value": {
+      "host": "mcp.easyparcel.com",
+      "http": {
+        "paths": [
+          {
+            "path": "/*",
+            "pathType": "ImplementationSpecific",
+            "backend": {
+              "service": {
+                "name": "easyparcel-mcp-svc",
+                "port": { "number": 80 }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+]

@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: easyparcel-mcp
+  namespace: default
+  labels:
+    app: easyparcel-mcp
+spec:
+  # OAuth proxy state (registered clients, pending authorizations, one-time codes) is now
+  # persisted in Redis via EP_MCP_REDIS_URL below, so it survives rollouts/restarts. Raising
+  # replicas additionally requires ingress session affinity, because MCP Streamable-HTTP
+  # sessions are still held per-pod in memory — see deploy/README.md.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: easyparcel-mcp
+  template:
+    metadata:
+      labels:
+        app: easyparcel-mcp
+    spec:
+      containers:
+        - name: mcp
+          # ACR (cluster pulls via the -vpc endpoint; aliyun-acr-credential-helper handles auth).
+          image: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp:0.1.8
+          imagePullPolicy: IfNotPresent
+          args:
+            - mcp
+            - --http
+            - --host=0.0.0.0
+            - --port=8790
+            - --oauth
+            - --public-url=https://mcp.easyparcel.com
+            # This is the GENERAL MCP endpoint (advanced users / Cursor / custom clients).
+            # Point it at its own "EasyParcel MCP (General)" app instead of the CLI client:
+            # - --ep-client-id=<mcp-general-client-id>
+          env:
+            # Shared OAuth state store — see chatgpt-deployment.yaml. Namespaced per --ep-client-id
+            # (the built-in CLI client id until a dedicated General app exists).
+            - name: EP_MCP_REDIS_URL
+              value: redis://easyparcel-redis.default.svc.cluster.local:6379
+          ports:
+            - name: http
+              containerPort: 8790
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8790
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8790
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 101
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

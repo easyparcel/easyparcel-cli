@@ -1,0 +1,66 @@
+{
+  "name": "@easyparcel/cli",
+  "version": "0.1.8",
+  "description": "EasyParcel CLI — a comprehensive command-line interface for the EasyParcel Open API, built for humans and AI agents.",
+  "type": "module",
+  "bin": {
+    "easyparcel-cli": "bin/ep.mjs",
+    "easyparcel": "bin/ep.mjs",
+    "ep": "bin/ep.mjs"
+  },
+  "files": [
+    "dist/index.js",
+    "dist/index.js.map",
+    "bin",
+    "scripts/postinstall.mjs",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "easyparcel",
+    "shipping",
+    "logistics",
+    "courier",
+    "cli",
+    "ai-agent",
+    "mcp",
+    "open-api"
+  ],
+  "author": "EasyParcel",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/easyparcel/easyparcel-cli.git" },
+  "homepage": "https://github.com/easyparcel/easyparcel-cli#readme",
+  "bugs": { "url": "https://github.com/easyparcel/easyparcel-cli/issues" },
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "prebuild": "node scripts/generate-skills.mjs",
+    "build": "tsup",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build",
+    "postinstall": "node scripts/postinstall.mjs",
+    "build:exe": "node scripts/build-exe.mjs",
+    "build:exe:current": "node scripts/generate-skills.mjs && bun build src/index.ts --compile --outfile dist/bin/easyparcel"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "commander": "^12.1.0"
+  },
+  "optionalDependencies": {
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "bun": "^1.1.38",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

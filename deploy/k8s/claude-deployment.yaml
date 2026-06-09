@@ -1,0 +1,71 @@
+# Second MCP source: Claude connector. Identical to the ChatGPT deployment but with its
+# OWN EasyParcel client id and its own public hostname, so EasyParcel attributes/revokes
+# Claude traffic independently. Apply with:  kubectl apply -f deploy/k8s/claude-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: easyparcel-mcp-claude
+  namespace: default
+  labels:
+    app: easyparcel-mcp-claude
+spec:
+  replicas: 1 # OAuth state is now in Redis (survives rollouts); raising replicas additionally
+  # needs ingress session affinity — MCP sessions are still per-pod. See deploy/README.md.
+  selector:
+    matchLabels:
+      app: easyparcel-mcp-claude
+  template:
+    metadata:
+      labels:
+        app: easyparcel-mcp-claude
+    spec:
+      containers:
+        - name: mcp
+          image: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp:0.1.8
+          imagePullPolicy: IfNotPresent
+          args:
+            - mcp
+            - --http
+            - --host=0.0.0.0
+            - --port=8790
+            - --oauth
+            - --public-url=https://mcp-claude.easyparcel.com
+            - --ep-client-id=f678cacf-a3f0-462b-8a36-08d9a5682785
+          env:
+            # Shared OAuth state store — see chatgpt-deployment.yaml. Namespaced per --ep-client-id.
+            - name: EP_MCP_REDIS_URL
+              value: redis://easyparcel-redis.default.svc.cluster.local:6379
+          ports:
+            - { name: http, containerPort: 8790 }
+          readinessProbe:
+            httpGet: { path: /health, port: 8790 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8790 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 101
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: easyparcel-mcp-claude-svc
+  namespace: default
+  labels:
+    app: easyparcel-mcp-claude
+spec:
+  selector:
+    app: easyparcel-mcp-claude
+  ports:
+    - { name: http, port: 80, targetPort: 8790 }

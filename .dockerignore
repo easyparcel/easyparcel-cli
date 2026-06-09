@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.github
+deploy
+*.log
+.claude
+.vscode
+*.tgz

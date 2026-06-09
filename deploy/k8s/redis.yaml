@@ -1,0 +1,81 @@
+# In-cluster Redis for the MCP OAuth proxy state store (registered clients, pending auths,
+# one-time codes). Runs inside the cluster so it needs no ApsaraDB IP/security-group whitelist
+# and no auth — it's only reachable on the cluster network via the Service below. The MCP
+# deployments point EP_MCP_REDIS_URL at redis://easyparcel-redis.default.svc.cluster.local:6379.
+#
+# Persistence: AOF on a NAS-backed PVC, so OAuth state survives Redis pod restarts/reschedules.
+# Apply with:  kubectl apply -f deploy/k8s/redis.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: easyparcel-redis-data
+  namespace: default
+spec:
+  storageClassName: alibabacloud-cnfs-nas
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: easyparcel-redis
+  namespace: default
+  labels:
+    app: easyparcel-redis
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # single shared volume — never run two writers at once
+  selector:
+    matchLabels:
+      app: easyparcel-redis
+  template:
+    metadata:
+      labels:
+        app: easyparcel-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args:
+            - redis-server
+            - --appendonly
+            - "yes"
+            - --maxmemory
+            - 256mb
+            - --maxmemory-policy
+            - volatile-ttl # OAuth keys all carry a TTL; evict the soonest-expiring under pressure
+          ports:
+            - { name: redis, containerPort: 6379 }
+          readinessProbe:
+            tcpSocket: { port: 6379 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 6379 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 320Mi }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: easyparcel-redis-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: easyparcel-redis
+  namespace: default
+  labels:
+    app: easyparcel-redis
+spec:
+  selector:
+    app: easyparcel-redis
+  ports:
+    - { name: redis, port: 6379, targetPort: 6379 }

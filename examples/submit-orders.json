@@ -1,0 +1,41 @@
+{
+  "shipment": [
+    {
+      "reference": "ORDER-1001",
+      "service_id": "EP-CS0XXXXXX",
+      "collection_date": "2026-06-10",
+      "weight": 1,
+      "height": 10,
+      "length": 20,
+      "width": 15,
+      "item": [
+        { "content": "Cotton T-shirt", "weight": 1, "height": 5, "length": 20, "width": 15, "currency_code": "MYR", "value": 50, "quantity": 1 }
+      ],
+      "sender": {
+        "name": "Alice Tan",
+        "phone_number_country_code": "MY",
+        "phone_number": "0123456789",
+        "email": "alice@example.com",
+        "address_1": "1 Jalan Bukit",
+        "city": "George Town",
+        "postcode": "11950",
+        "subdivision_code": "MY-07",
+        "country_code": "MY"
+      },
+      "receiver": {
+        "name": "Bob Lim",
+        "phone_number_country_code": "MY",
+        "phone_number": "0198765432",
+        "address_1": "2 Jalan Ampang",
+        "city": "Kuala Lumpur",
+        "postcode": "55100",
+        "subdivision_code": "MY-14",
+        "country_code": "MY"
+      },
+      "feature": {
+        "sms_tracking": false,
+        "email_tracking": true
+      }
+    }
+  ]
+}

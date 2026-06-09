@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  # Naming follows the cluster convention (<app>-svc), referenced by easyparcel-ingress.
+  name: easyparcel-mcp-svc
+  namespace: default
+  labels:
+    app: easyparcel-mcp
+spec:
+  selector:
+    app: easyparcel-mcp
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8790

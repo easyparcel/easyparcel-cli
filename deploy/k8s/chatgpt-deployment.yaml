@@ -1,0 +1,78 @@
+# MCP source: ChatGPT connector. Its own EasyParcel client id + hostname so EasyParcel
+# attributes/revokes ChatGPT traffic independently.
+# Apply with:  kubectl apply -f deploy/k8s/chatgpt-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: easyparcel-mcp-chatgpt
+  namespace: default
+  labels:
+    app: easyparcel-mcp-chatgpt
+spec:
+  replicas: 1 # OAuth state is now in Redis (survives rollouts); raising replicas additionally
+  # needs ingress session affinity — MCP sessions are still per-pod. See deploy/README.md.
+  selector:
+    matchLabels:
+      app: easyparcel-mcp-chatgpt
+  template:
+    metadata:
+      labels:
+        app: easyparcel-mcp-chatgpt
+    spec:
+      containers:
+        - name: mcp
+          image: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp:0.1.8
+          imagePullPolicy: IfNotPresent
+          args:
+            - mcp
+            - --http
+            - --host=0.0.0.0
+            - --port=8790
+            - --oauth
+            - --public-url=https://mcp-chatgpt.easyparcel.com
+            - --ep-client-id=72dfba30-fdad-4ddc-bb60-347763aaa991
+          env:
+            # Shared OAuth state store: registered clients / codes / pending auths persist here, so a
+            # rollout or restart no longer drops registrations (clients kept hitting invalid_client).
+            # Keys are namespaced per --ep-client-id, so all three deployments can share one Redis.
+            - name: EP_MCP_REDIS_URL
+              value: redis://easyparcel-redis.default.svc.cluster.local:6379
+            # Pre-register the existing ChatGPT connector's client (it registered against an older,
+            # since-replaced pod) so it authorizes without remove + re-add. redirect_uri must match
+            # exactly what ChatGPT sends to /authorize; update if the connector is recreated.
+            - name: EP_MCP_SEED_CLIENTS
+              value: '[{"client_id":"r3em8jm0a8vlpreS4u918jdP5YlS0xCZ","redirect_uris":["https://chatgpt.com/connector/oauth/AWx1IV2OseXF"],"client_name":"ChatGPT (seeded)"}]'
+          ports:
+            - { name: http, containerPort: 8790 }
+          readinessProbe:
+            httpGet: { path: /health, port: 8790 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8790 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 101
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: easyparcel-mcp-chatgpt-svc
+  namespace: default
+  labels:
+    app: easyparcel-mcp-chatgpt
+spec:
+  selector:
+    app: easyparcel-mcp-chatgpt
+  ports:
+    - { name: http, port: 80, targetPort: 8790 }

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.easyparcel/
+.DS_Store
+*.tsbuildinfo
+.claude/
+.tmp/
+*.zip

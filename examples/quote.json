@@ -1,0 +1,13 @@
+{
+  "shipment": [
+    {
+      "sender": { "postcode": "11950", "country": "MY", "subdivision_code": "MY-07" },
+      "receiver": { "postcode": "55100", "country": "MY", "subdivision_code": "MY-14" },
+      "weight": 1.5,
+      "width": 20,
+      "height": 10,
+      "length": 25,
+      "parcel_value": 150
+    }
+  ]
+}

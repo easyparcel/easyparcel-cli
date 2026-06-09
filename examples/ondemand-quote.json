@@ -1,0 +1,9 @@
+{
+  "schedule_pickup_date": "2026-06-10",
+  "schedule_pickup_time": "14:30:00",
+  "timezone": "Asia/Kuala_Lumpur",
+  "waypoint": [
+    { "coordinates": { "latitude": 3.1579, "longitude": 101.7123 }, "type": "pickup", "address": "Pickup point" },
+    { "coordinates": { "latitude": 3.1390, "longitude": 101.6869 }, "type": "dropoff", "address": "Drop-off point" }
+  ]
+}

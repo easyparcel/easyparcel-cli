@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: default
+resources:
+  - deployment.yaml
+  - service.yaml
+
+# The ingress is NOT created here — we append a rule to the existing production
+# `easyparcel-ingress` (ALB) instead. See ingress-rule.patch.json and deploy/README.md.
+
+images:
+  - name: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp
+    newTag: "0.1.8"
