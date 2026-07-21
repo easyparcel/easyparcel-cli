@@ -22,7 +22,7 @@ spec:
       containers:
         - name: mcp
           # ACR (cluster pulls via the -vpc endpoint; aliyun-acr-credential-helper handles auth).
-          image: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp:0.1.9
+          image: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp:0.1.10
           imagePullPolicy: IfNotPresent
           args:
             - mcp

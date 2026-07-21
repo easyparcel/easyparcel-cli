@@ -39,6 +39,44 @@ export interface OAuthProxyOptions {
   scopes?: string[];
   /** Backing store for registered clients, pending auths and one-time codes (in-memory or Redis). */
   store: OAuthStore;
+  /**
+   * Redirect-URI hosts trusted enough to authorize a client we've never seen registered.
+   * MCP clients (ChatGPT's end-user connector, OpenAI's platform "test connector" console,
+   * Claude, ...) don't all go through OUR /register before /authorize — some replay a client_id
+   * from a registration made against a different code path, a since-expired/lost record, or an
+   * app-version-specific cache we were never told about. Rather than whack-a-mole seeding each
+   * new client_id we see, auto-accept (and durably register) any client_id whose redirect_uri
+   * points at one of these HTTPS, non-attacker-controlled hosts. PKCE + the real EasyParcel login
+   * still gate the token, so this only affects our internal bookkeeping of "which app is asking."
+   */
+  trustedRedirectHosts?: string[];
+}
+
+/** Built-in trusted MCP-client redirect hosts (matched as the exact host or a subdomain). */
+export const DEFAULT_TRUSTED_REDIRECT_HOSTS = [
+  "chatgpt.com",
+  "openai.com",
+  "claude.ai",
+  "claude.com",
+  "anthropic.com",
+];
+
+/** True if `host` equals `trusted` or is a subdomain of it. */
+function hostMatches(host: string, trusted: string): boolean {
+  return host === trusted || host.endsWith(`.${trusted}`);
+}
+
+/** True if `redirectUri` is https (or loopback) and its host is in the trusted list. */
+function isTrustedRedirect(redirectUri: string, trustedHosts: string[]): boolean {
+  let u: URL;
+  try {
+    u = new URL(redirectUri);
+  } catch {
+    return false;
+  }
+  const loopback = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  if (u.protocol !== "https:" && !loopback) return false;
+  return loopback || trustedHosts.some((h) => hostMatches(u.hostname, h));
 }
 
 interface RegisteredClient {
@@ -160,6 +198,7 @@ export interface OAuthProxy {
 export function createOAuthProxy(opts: OAuthProxyOptions): OAuthProxy {
   const store = opts.store;
   const scopes = opts.scopes ?? ["easyparcel"];
+  const trustedRedirectHosts = opts.trustedRedirectHosts ?? DEFAULT_TRUSTED_REDIRECT_HOSTS;
   // TTLs are enforced by the store (in-memory expiry or Redis PX); no manual sweep needed.
 
   function resourceMetadataUrl(publicBase: string): string {
@@ -268,8 +307,22 @@ export function createOAuthProxy(opts: OAuthProxyOptions): OAuthProxy {
       const clientState = q.get("state") ?? undefined;
       const scope = q.get("scope") ?? undefined;
 
-      const client = await store.get<RegisteredClient>("client", clientId);
       // Client / redirect_uri must be valid BEFORE we ever redirect (anti open-redirect).
+      if (!clientId) {
+        oauthError(res, 400, "invalid_client", "missing client_id");
+        return true;
+      }
+      let client = await store.get<RegisteredClient>("client", clientId);
+      if (!client && redirectUri && isTrustedRedirect(redirectUri, trustedRedirectHosts)) {
+        // Unknown client, but the redirect lands on a host we trust (chatgpt.com, claude.ai, ...) —
+        // some MCP client code paths replay a client_id without ever calling OUR /register (a
+        // different app flow, a lost/expired record, ...). Auto-register it durably rather than
+        // reject: the redirect target isn't attacker-controlled, and PKCE + the real EasyParcel
+        // login still gate the token.
+        client = { redirectUris: [redirectUri], name: "auto-trusted", createdAt: Date.now() };
+        await store.set("client", clientId, client, CLIENT_TTL);
+        log.info(`Auto-registered trusted client ${clientId} (redirect_uri host: ${new URL(redirectUri).hostname}).`);
+      }
       if (!client) {
         oauthError(res, 400, "invalid_client", "unknown client_id (register first)");
         return true;

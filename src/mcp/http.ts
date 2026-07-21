@@ -4,7 +4,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { OPERATIONS } from "../operations";
 import { buildServer } from "./server";
-import { createOAuthProxy, type OAuthProxy } from "./oauth";
+import { createOAuthProxy, DEFAULT_TRUSTED_REDIRECT_HOSTS, type OAuthProxy } from "./oauth";
 import { createOAuthStore, seedOAuthClients, type OAuthStore } from "./store";
 import { getContext } from "../core/context";
 import { DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET } from "../core/config";
@@ -130,6 +130,13 @@ export async function runHttpMcpServer(opts: HttpMcpOptions): Promise<void> {
     await seedOAuthClients(oauthStore, process.env.EP_MCP_SEED_CLIENTS);
   }
 
+  // Extra trusted redirect hosts (comma-separated) beyond the built-in chatgpt.com/claude.ai/etc.
+  // list — lets a deployment allow another MCP client's domain without a code change.
+  const extraTrustedHosts = (process.env.EP_MCP_TRUSTED_REDIRECT_HOSTS || "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean);
+
   const oauth: OAuthProxy | null =
     opts.oauth && oauthStore
       ? createOAuthProxy({
@@ -137,6 +144,9 @@ export async function runHttpMcpServer(opts: HttpMcpOptions): Promise<void> {
           clientId: epClientId,
           clientSecret: epClientSecret,
           store: oauthStore,
+          trustedRedirectHosts: extraTrustedHosts.length
+            ? [...DEFAULT_TRUSTED_REDIRECT_HOSTS, ...extraTrustedHosts]
+            : undefined,
         })
       : null;
   if (oauth) log.info(`OAuth proxy upstream EasyParcel client: ${epClientId}`);
