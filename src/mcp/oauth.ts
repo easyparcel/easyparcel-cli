@@ -72,8 +72,14 @@ interface IssuedCode {
 }
 
 const TEN_MIN = 10 * 60 * 1000;
-const CLIENT_TTL = 30 * 24 * 60 * 60 * 1000; // registered clients expire after ~30d
-const MAX_CLIENTS = 1000; // hard cap so unauthenticated /register can't grow memory unbounded
+// MCP clients (ChatGPT, Claude, ...) register ONCE when the connector is added, then keep
+// reusing that client_id indefinitely — /authorize may not run again for months (e.g. only when
+// the upstream EasyParcel session needs re-login). A short TTL here doesn't bound memory (Redis
+// is durable, not the old in-memory cache this was tuned for) — it just silently breaks a client
+// that goes quiet for longer than the window, reproducing the exact "invalid_client" bug this was
+// meant to fix. Keep it long, and slide it forward on every successful /authorize (below).
+const CLIENT_TTL = 10 * 365 * 24 * 60 * 60 * 1000; // ~10 years
+const MAX_CLIENTS = 1000; // hard cap so unauthenticated /register can't grow storage unbounded
 
 function base64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -272,6 +278,9 @@ export function createOAuthProxy(opts: OAuthProxyOptions): OAuthProxy {
         oauthError(res, 400, "invalid_request", "redirect_uri not registered for this client");
         return true;
       }
+      // Slide the registration's expiry forward on every real use, so an actively-used client
+      // never expires regardless of how long ago it originally registered.
+      await store.set("client", clientId, client, CLIENT_TTL);
       if (responseType !== "code") {
         errorRedirect(res, redirectUri, "unsupported_response_type", clientState);
         return true;

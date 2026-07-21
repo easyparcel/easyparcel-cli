@@ -10,4 +10,4 @@ resources:
 
 images:
   - name: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp
-    newTag: "0.1.8"
+    newTag: "0.1.9"

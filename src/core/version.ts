@@ -1,5 +1,5 @@
 // Keep in sync with package.json "version".
-export const CLI_VERSION = "0.1.8";
+export const CLI_VERSION = "0.1.9";
 
 // Keep in sync with package.json "name".
 export const PACKAGE_NAME = "@easyparcel/cli";
