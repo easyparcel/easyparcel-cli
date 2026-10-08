@@ -186,7 +186,7 @@ export interface DeviceAuthorization {
   interval: number;
 }
 
-/** Start a device-code flow: POST {base}/device_authorization (RFC 8628 §3.1–3.2). */
+/** Start a device-code flow: POST {base}/oauth/device_authorization (RFC 8628 §3.1–3.2). */
 export async function requestDeviceAuthorization(p: {
   baseUrl: string;
   clientId: string;
@@ -194,7 +194,7 @@ export async function requestDeviceAuthorization(p: {
 }): Promise<DeviceAuthorization> {
   const body = new URLSearchParams({ client_id: p.clientId });
   if (p.scope) body.set("scope", p.scope);
-  const { status, json } = await rawTokenPost(p.baseUrl, "/device_authorization", body, p.clientId);
+  const { status, json } = await rawTokenPost(p.baseUrl, "/oauth/device_authorization", body, p.clientId);
   const d = json?.device_code ? json : json?.data?.device_code ? json.data : null;
   if (status >= 400 || json?.error || !d) {
     const msg = json?.error_description || json?.message || json?.error || `device authorization failed (HTTP ${status})`;
@@ -317,7 +317,7 @@ export async function pollForDeviceToken(opts: DevicePollOptions): Promise<Token
 // ---------------------------------------------------------------------------
 
 /**
- * Best-effort token revocation: POST {base}/revoke (RFC 7009). Never throws —
+ * Best-effort token revocation: POST {base}/oauth/revoke (RFC 7009). Never throws —
  * returns false on any failure so logout can revoke-then-clear regardless.
  */
 export async function revokeToken(p: {
@@ -330,7 +330,7 @@ export async function revokeToken(p: {
   const body = new URLSearchParams({ token: p.token });
   if (p.tokenTypeHint) body.set("token_type_hint", p.tokenTypeHint);
   try {
-    const { status } = await rawTokenPost(p.baseUrl, "/revoke", body, p.clientId, p.clientSecret);
+    const { status } = await rawTokenPost(p.baseUrl, "/oauth/revoke", body, p.clientId, p.clientSecret);
     // RFC 7009 §2.2: the AS responds 200 whether or not the token existed.
     return status < 400;
   } catch (e) {
