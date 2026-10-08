@@ -32,10 +32,17 @@
   ],
   "author": "EasyParcel",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/easyparcel/easyparcel-cli.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/easyparcel/easyparcel-cli.git"
+  },
   "homepage": "https://github.com/easyparcel/easyparcel-cli#readme",
-  "bugs": { "url": "https://github.com/easyparcel/easyparcel-cli/issues" },
-  "publishConfig": { "access": "public" },
+  "bugs": {
+    "url": "https://github.com/easyparcel/easyparcel-cli/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "prebuild": "node scripts/generate-skills.mjs",
     "build": "tsup",
@@ -53,6 +60,7 @@
     "commander": "^12.1.0"
   },
   "optionalDependencies": {
+    "@napi-rs/keyring": "^2.1.0",
     "ioredis": "^5.4.1"
   },
   "devDependencies": {

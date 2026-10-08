@@ -28,6 +28,13 @@ export interface ProfileCredentials {
   scope?: string;
   /** Human label for the connected account (best-effort). */
   account_label?: string;
+  /**
+   * Internal marker: which backend holds this profile's secret fields.
+   * "keychain" → access/refresh/client_secret live in the OS keychain and are
+   * absent from the file index. "file" (or undefined, legacy) → everything is in
+   * the 0600 credentials.json. Stripped before credentials are returned to callers.
+   */
+  storage?: "keychain" | "file";
 }
 
 export interface CredentialStore {

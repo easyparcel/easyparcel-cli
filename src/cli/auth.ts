@@ -14,6 +14,11 @@ import {
   openUrl,
   exchangeCode,
   clientCredentials,
+  requestDeviceAuthorization,
+  pollForDeviceToken,
+  revokeToken,
+  detectHeadless,
+  currentHeadlessSignals,
 } from "../core/oauth";
 import {
   getProfileCredentials,
@@ -21,7 +26,9 @@ import {
   clearProfile,
   listProfiles,
   loadStore,
+  hasEnvAccessToken,
 } from "../core/credentials";
+import { keychainAvailable } from "../core/keychain";
 import { tokensFromResponse, doRefresh, isExpired } from "../core/tokens";
 import { apiRequest } from "../core/client";
 import type { RuntimeContext } from "../core/context";
@@ -92,7 +99,12 @@ function uniqueSlug(name: unknown, accountId: unknown, used: Set<string>): strin
  * mint + store a token (profile) for each, via the core list_accounts /
  * switch_token endpoints. Sets the current account as the default profile.
  */
-async function authorizeAllAccounts(ctx: RuntimeContext, baseTr: TokenResponse, client: ClientCreds): Promise<void> {
+async function authorizeAllAccounts(
+  ctx: RuntimeContext,
+  baseTr: TokenResponse,
+  client: ClientCreds,
+  grant: string,
+): Promise<void> {
   // Persist the base token so apiRequest can authenticate the enumerate/switch calls.
   setProfileCredentials(
     ctx.profile,
@@ -103,7 +115,7 @@ async function authorizeAllAccounts(ctx: RuntimeContext, baseTr: TokenResponse, 
   const accounts = Array.isArray(listEnv.data) ? (listEnv.data as any[]) : [];
   if (accounts.length === 0) {
     log.warn("No accounts returned; kept the single login.");
-    persistLogin(ctx, baseTr, client, "authorization_code");
+    persistLogin(ctx, baseTr, client, grant);
     return;
   }
 
@@ -143,15 +155,21 @@ async function authorizeAllAccounts(ctx: RuntimeContext, baseTr: TokenResponse, 
   log.info(`Authorized ${created.length} account(s). Default profile: '${current ? current.profile : ctx.profile}'.`);
   printJson({
     status: "ok",
-    grant: "authorization_code",
+    grant,
     default_profile: current ? current.profile : null,
     accounts: created,
   });
 }
 
-async function finishLogin(ctx: RuntimeContext, tr: TokenResponse, client: ClientCreds, all: boolean): Promise<void> {
-  if (all) await authorizeAllAccounts(ctx, tr, client);
-  else persistLogin(ctx, tr, client, "authorization_code");
+async function finishLogin(
+  ctx: RuntimeContext,
+  tr: TokenResponse,
+  client: ClientCreds,
+  all: boolean,
+  grant: string,
+): Promise<void> {
+  if (all) await authorizeAllAccounts(ctx, tr, client, grant);
+  else persistLogin(ctx, tr, client, grant);
 }
 
 function parsePasted(v: string): { code?: string; state?: string } {
@@ -167,10 +185,113 @@ function parsePasted(v: string): { code?: string; state?: string } {
   return { code: v || undefined };
 }
 
+/** Mask a token for display so it is never printed in full. */
+export function maskToken(t: string): string {
+  if (t.length <= 8) return "****";
+  return t.slice(0, 6) + "…" + t.slice(-2);
+}
+
+/** Read a token from a stream (default stdin) to EOF, trimmed. Never echoes. */
+export async function readStdinToken(stream: NodeJS.ReadableStream = process.stdin): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+  }
+  return Buffer.concat(chunks).toString("utf8").trim();
+}
+
+/**
+ * Validate a stdin-provided personal access token and make it available to THIS
+ * process (never written to the keychain or disk). The caller reuses it across
+ * invocations via EASYPARCEL_TOKEN / EASYPARCEL_ACCESS_TOKEN.
+ */
+export function prepareWithToken(raw: string): { token: string; masked: string } {
+  const token = raw.trim();
+  if (!token) {
+    throw new CliError(
+      "No token received on stdin. Pipe a token: `printf %s \"$EASYPARCEL_TOKEN\" | ep login --with-token`.",
+      ExitCode.USAGE,
+    );
+  }
+  // In-process only; getProfileCredentials() overlays this and maybePersist() skips writing.
+  process.env.EASYPARCEL_ACCESS_TOKEN = token;
+  return { token, masked: maskToken(token) };
+}
+
+async function withTokenLogin(ctx: RuntimeContext, opts: Record<string, any>): Promise<void> {
+  const raw = await readStdinToken();
+  const { token, masked } = prepareWithToken(raw);
+  if (!token.startsWith("epat_")) {
+    log.warn("Token does not start with 'epat_'; personal access tokens use that prefix. Continuing.");
+  }
+  let verified: boolean | null = null;
+  if (opts.verify !== false) {
+    try {
+      const env = await apiRequest(ctx, { method: "GET", path: "account/get_account_information" });
+      verified = (env.status_code ?? 0) < 400;
+    } catch {
+      verified = false;
+    }
+  }
+  printJson({
+    status: "ok",
+    grant: "personal_access_token",
+    profile: ctx.profile,
+    persisted: false,
+    token: masked,
+    verified,
+    note: "Token is NOT written to disk. Set EASYPARCEL_TOKEN (or EASYPARCEL_ACCESS_TOKEN) to reuse it.",
+  });
+}
+
+async function deviceLogin(
+  ctx: RuntimeContext,
+  client: ClientCreds,
+  o: { scope?: string; all: boolean; json: boolean },
+): Promise<void> {
+  const da = await requestDeviceAuthorization({ baseUrl: ctx.baseUrl, clientId: client.clientId, scope: o.scope });
+  // Human prompt on stderr (stdout stays clean for the final result JSON).
+  log.info("To sign in, open the URL on any device and enter the code:");
+  process.stderr.write(`\n  URL:  ${da.verification_uri}\n  Code: ${da.user_code}\n`);
+  if (da.verification_uri_complete) {
+    process.stderr.write(`\n  Or open directly: ${da.verification_uri_complete}\n`);
+  }
+  process.stderr.write("\nWaiting for authorization…\n");
+  if (o.json) {
+    printJson({
+      status: "authorization_pending",
+      grant: "device_code",
+      user_code: da.user_code,
+      verification_uri: da.verification_uri,
+      verification_uri_complete: da.verification_uri_complete ?? null,
+      expires_in: da.expires_in,
+      interval: da.interval,
+    });
+  }
+  const tr = await pollForDeviceToken({
+    baseUrl: ctx.baseUrl,
+    clientId: client.clientId,
+    clientSecret: client.clientSecret,
+    deviceCode: da.device_code,
+    interval: da.interval,
+    expiresIn: da.expires_in,
+  });
+  await finishLogin(ctx, tr, client, o.all, "device_code");
+}
+
 async function loginAction(opts: Record<string, any>): Promise<void> {
   const ctx = getContext();
-  const client = resolveClient(ctx, opts);
   const scope: string | undefined = opts.scope;
+  const jsonMode = Boolean(opts.json);
+  const nonInteractive = Boolean(opts.nonInteractive);
+
+  // --- --with-token: read an epat_ token from stdin (never persisted) ---
+  if (opts.withToken) {
+    await withTokenLogin(ctx, opts);
+    return;
+  }
+
+  const client = resolveClient(ctx, opts);
 
   // --- client_credentials: no browser at all ---
   if (opts.clientCredentials) {
@@ -191,14 +312,32 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
     return;
   }
 
-  const port = Number(opts.port ?? DEFAULT_CALLBACK_PORT);
+  // --- device authorization grant (explicit --device, or auto when headless) ---
+  const useDevice =
+    opts.device === true ? true : opts.device === false ? false : detectHeadless(currentHeadlessSignals());
+  if (useDevice) {
+    await deviceLogin(ctx, client, { scope, all: Boolean(opts.all), json: jsonMode });
+    return;
+  }
+
+  // Random free loopback port (RFC 8252); keep the registered 8788 only as a fallback.
+  const explicitPort = opts.port != null;
+  const port = explicitPort ? Number(opts.port) : 0;
+  const fallbackPort = explicitPort ? undefined : DEFAULT_CALLBACK_PORT;
   const state = randomState();
   const pkce = generatePkce();
   const waitMs = Number(opts.wait ?? 300) * 1000;
 
   // --- manual paste (headless / no reachable loopback) ---
-  if (opts.noBrowser) {
-    const redirectUri = opts.redirectUri || `http://localhost:${port}/callback`;
+  // NOTE: commander maps --no-browser to opts.browser === false (not opts.noBrowser).
+  if (opts.browser === false) {
+    if (nonInteractive) {
+      throw new CliError(
+        "--no-browser needs an interactive paste. Use --device or --with-token for non-interactive login.",
+        ExitCode.USAGE,
+      );
+    }
+    const redirectUri = opts.redirectUri || `http://localhost:${explicitPort ? port : DEFAULT_CALLBACK_PORT}/callback`;
     const url = buildAuthUrl({ baseUrl: ctx.baseUrl, clientId: client.clientId, redirectUri, challenge: pkce.challenge, state, scope });
     log.info("Open this URL in a browser to authorize:");
     process.stderr.write("\n  " + url + "\n\n");
@@ -218,12 +357,12 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
       codeVerifier: pkce.verifier,
       state,
     });
-    await finishLogin(ctx, tr, client, Boolean(opts.all));
+    await finishLogin(ctx, tr, client, Boolean(opts.all), "authorization_code");
     return;
   }
 
   // --- browser + loopback callback ---
-  const server = await startLoopbackServer({ state, port });
+  const server = await startLoopbackServer({ state, port, fallbackPort });
   const redirectUri = opts.redirectUri || server.redirectUri;
   const url = buildAuthUrl({ baseUrl: ctx.baseUrl, clientId: client.clientId, redirectUri, challenge: pkce.challenge, state, scope });
   log.info(`Waiting for authorization on ${server.redirectUri}`);
@@ -241,14 +380,20 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
       codeVerifier: pkce.verifier,
       state,
     });
-    await finishLogin(ctx, tr, client, Boolean(opts.all));
+    await finishLogin(ctx, tr, client, Boolean(opts.all), "authorization_code");
   } finally {
     server.close();
   }
 }
 
 function tokenSource(profile: string): "env" | "store" | "none" {
-  if (process.env.EASYPARCEL_ACCESS_TOKEN || process.env.EASYPARCEL_REFRESH_TOKEN) return "env";
+  if (
+    process.env.EASYPARCEL_ACCESS_TOKEN ||
+    process.env.EASYPARCEL_TOKEN ||
+    process.env.EASYPARCEL_REFRESH_TOKEN
+  ) {
+    return "env";
+  }
   return loadStore().profiles[profile] ? "store" : "none";
 }
 
@@ -266,6 +411,7 @@ function statusAction(): void {
     has_refresh_token: Boolean(creds.refresh_token),
     expires_at: creds.expires_at ?? null,
     access_token_expired: creds.access_token ? isExpired(creds.expires_at) : null,
+    storage: keychainAvailable() ? "keychain" : "file",
     profiles: listProfiles(),
   });
   if (!authenticated) process.exitCode = ExitCode.AUTH;
@@ -283,13 +429,56 @@ async function refreshAction(): Promise<void> {
   printJson({ status: "ok", profile: ctx.profile, expires_at: updated.expires_at ?? null });
 }
 
-function logoutAction(): void {
-  const ctx = getContext();
-  const removed = clearProfile(ctx.profile);
-  if (process.env.EASYPARCEL_ACCESS_TOKEN || process.env.EASYPARCEL_REFRESH_TOKEN) {
-    log.warn("Environment tokens (EASYPARCEL_ACCESS_TOKEN/REFRESH_TOKEN) are still set and will continue to be used.");
+/**
+ * Server-side revoke THEN local clear. Revocation is best-effort: its failure
+ * must never block clearing the local credential. Exported for unit testing the
+ * ordering/robustness with injected callbacks.
+ */
+export async function logoutSequence(opts: {
+  refreshToken?: string;
+  revoke: (rt: string) => Promise<boolean>;
+  clear: () => boolean;
+}): Promise<{ revoked: boolean; cleared: boolean }> {
+  let revoked = false;
+  if (opts.refreshToken) {
+    try {
+      revoked = await opts.revoke(opts.refreshToken);
+    } catch {
+      revoked = false; // best-effort; proceed to clear regardless
+    }
   }
-  printJson({ status: removed ? "logged_out" : "no_stored_credentials", profile: ctx.profile });
+  const cleared = opts.clear();
+  return { revoked, cleared };
+}
+
+async function logoutAction(opts: Record<string, any>): Promise<void> {
+  const ctx = getContext();
+  const creds = getProfileCredentials(ctx.profile);
+  const client = resolveClient(ctx, opts);
+
+  const { revoked, cleared } = await logoutSequence({
+    refreshToken: creds.refresh_token,
+    revoke: (rt) =>
+      revokeToken({
+        baseUrl: ctx.baseUrl,
+        token: rt,
+        tokenTypeHint: "refresh_token",
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    clear: () => clearProfile(ctx.profile),
+  });
+
+  if (hasEnvAccessToken() || process.env.EASYPARCEL_REFRESH_TOKEN) {
+    log.warn(
+      "Environment tokens (EASYPARCEL_ACCESS_TOKEN/EASYPARCEL_TOKEN/EASYPARCEL_REFRESH_TOKEN) are still set and will continue to be used.",
+    );
+  }
+  printJson({
+    status: cleared ? "logged_out" : "no_stored_credentials",
+    profile: ctx.profile,
+    revoked,
+  });
 }
 
 async function whoamiAction(): Promise<void> {
@@ -299,30 +488,57 @@ async function whoamiAction(): Promise<void> {
   if ((env.status_code ?? 0) >= 400) process.exitCode = ExitCode.AUTH;
 }
 
+/** Attach the shared `login` options (used by both `ep login` and `ep auth login`). */
+function attachLoginOptions(cmd: Command): Command {
+  return cmd
+    .option("--client-id <id>", "Override the built-in OAuth client id")
+    .option("--client-secret <secret>", "OAuth client secret (only for confidential/custom apps)")
+    .option("--device", "Use the device authorization grant (RFC 8628); auto-selected when headless/SSH")
+    .option("--no-device", "Force the browser flow even when headless")
+    .option("--with-token", "Read a personal access token (epat_) from stdin; never written to disk")
+    .option("--no-verify", "Skip the server verification call for --with-token")
+    .option("--client-credentials", "Use the client_credentials grant (no browser)")
+    .option("--all", "Authorize ALL accounts you belong to and save one profile per account")
+    .option("--no-browser", "Print the URL and paste the redirect code back (headless)")
+    .option("--redirect-uri <uri>", "Override the redirect URI (must be registered)")
+    .option("--port <port>", `Loopback callback port (default: a random free port, ${DEFAULT_CALLBACK_PORT} fallback)`)
+    .option("--scope <scope>", "OAuth scope (usually empty for this API)")
+    .option("--json", "Emit machine-readable JSON status (for agents/CI)")
+    .option("--non-interactive", "Never prompt; fail instead of waiting for interactive input")
+    .option("--wait <seconds>", "Seconds to wait for browser authorization", "300");
+}
+
+const LOGIN_DESCRIPTION =
+  "Sign in to EasyParcel. Default: browser OAuth2 + PKCE on a random loopback port. " +
+  "Use --device for a no-browser device code (auto over SSH), or --with-token for a piped epat_ token.";
+
 export function registerAuth(program: Command): void {
   const auth = program.command("auth").description("Authenticate and manage credentials / profiles");
 
-  addGlobalOptions(
-    auth
-      .command("login")
-      .description("Authenticate via browser (OAuth2 + PKCE). Uses the built-in CLI app by default — just run `ep auth login`.")
-      .option("--client-id <id>", "Override the built-in OAuth client id")
-      .option("--client-secret <secret>", "OAuth client secret (only for confidential/custom apps)")
-      .option("--client-credentials", "Use the client_credentials grant (no browser)")
-      .option("--all", "Authorize ALL accounts you belong to and save one profile per account")
-      .option("--no-browser", "Print the URL and paste the redirect code back (headless)")
-      .option("--redirect-uri <uri>", "Override the redirect URI (must be registered)")
-      .option("--port <port>", `Loopback callback port (default ${DEFAULT_CALLBACK_PORT})`)
-      .option("--scope <scope>", "OAuth scope (usually empty for this API)")
-      .option("--wait <seconds>", "Seconds to wait for browser authorization", "300"),
-  ).action(loginAction);
+  addGlobalOptions(attachLoginOptions(auth.command("login").description(LOGIN_DESCRIPTION))).action(loginAction);
 
   addGlobalOptions(auth.command("status").description("Show authentication status for the active profile")).action(
     statusAction,
   );
   addGlobalOptions(auth.command("refresh").description("Force an access-token refresh")).action(refreshAction);
-  addGlobalOptions(auth.command("logout").description("Remove stored credentials for the active profile")).action(
-    logoutAction,
-  );
+  addGlobalOptions(
+    auth
+      .command("logout")
+      .description("Revoke the refresh token server-side, then clear local credentials")
+      .option("--client-id <id>", "OAuth client id for the revoke call")
+      .option("--client-secret <secret>", "OAuth client secret for the revoke call")
+      .option("--json", "Emit machine-readable JSON status"),
+  ).action(logoutAction);
   addGlobalOptions(auth.command("whoami").description("Fetch the connected account profile")).action(whoamiAction);
+
+  // Top-level aliases (match the spec's `ep login` / `ep logout`).
+  addGlobalOptions(attachLoginOptions(program.command("login").description(LOGIN_DESCRIPTION))).action(loginAction);
+  addGlobalOptions(
+    program
+      .command("logout")
+      .description("Revoke the refresh token server-side, then clear local credentials")
+      .option("--client-id <id>", "OAuth client id for the revoke call")
+      .option("--client-secret <secret>", "OAuth client secret for the revoke call")
+      .option("--json", "Emit machine-readable JSON status"),
+  ).action(logoutAction);
 }

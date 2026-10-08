@@ -1,4 +1,4 @@
-import { getProfileCredentials, setProfileCredentials } from "./credentials";
+import { getProfileCredentials, setProfileCredentials, hasEnvAccessToken } from "./credentials";
 import { refreshToken } from "./oauth";
 import { CliError, ExitCode } from "./errors";
 import { log } from "./logger";
@@ -32,12 +32,12 @@ export function tokensFromResponse(tr: TokenResponse, extra?: Partial<ProfileCre
 }
 
 /**
- * Persist tokens to disk, UNLESS the user is in pure env-injection mode
- * (EASYPARCEL_ACCESS_TOKEN set) — in that case the agent/CI owns the tokens
- * and we never write to disk.
+ * Persist tokens, UNLESS the user is in pure env-injection mode
+ * (EASYPARCEL_ACCESS_TOKEN / EASYPARCEL_TOKEN set) — in that case the agent/CI
+ * owns the tokens and we never write them to the keychain or disk.
  */
 export function maybePersist(ctx: RuntimeContext, creds: ProfileCredentials): void {
-  if (process.env.EASYPARCEL_ACCESS_TOKEN) return;
+  if (hasEnvAccessToken()) return;
   setProfileCredentials(ctx.profile, creds);
 }
 
