@@ -3,7 +3,8 @@ import { Readable } from "node:stream";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readStdinToken, prepareWithToken, maskToken } from "../src/cli/auth";
+import { PassThrough } from "node:stream";
+import { readStdinToken, prepareWithToken, maskToken, readHiddenToken } from "../src/cli/auth";
 import { credentialsPath } from "../src/core/paths";
 
 let tmp: string;
@@ -65,5 +66,19 @@ describe("maskToken", () => {
   });
   it("fully masks very short values", () => {
     expect(maskToken("short")).toBe("****");
+  });
+});
+
+describe("readHiddenToken (interactive --with-token)", () => {
+  it("returns the typed token without echoing it", async () => {
+    const input = new PassThrough();
+    let shown = "";
+    const output = new PassThrough();
+    output.on("data", (c) => (shown += c.toString()));
+    const pending = readHiddenToken("? Paste a personal access token (epat_…): ", input, output);
+    setImmediate(() => input.write("epat_s3cret_value\r"));
+    await expect(pending).resolves.toBe("epat_s3cret_value");
+    expect(shown).toContain("Paste a personal access token");
+    expect(shown).not.toContain("s3cret");
   });
 });

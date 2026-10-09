@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { interpretDeviceToken, pollForDeviceToken } from "../src/core/oauth";
+import { interpretDeviceToken, pollForDeviceToken, describeDevice } from "../src/core/oauth";
 
 const noSleep = () => Promise.resolve();
 
@@ -98,5 +98,15 @@ describe("pollForDeviceToken", () => {
         poster: async () => ({ status: 400, json: { error: "authorization_pending" } }),
       }),
     ).rejects.toThrow(/expired/i);
+  });
+});
+
+describe("describeDevice (label on the approval page)", () => {
+  it("names the host and OS, dropping the .local suffix", () => {
+    expect(describeDevice({ hostname: "Zhik-MBP.local", platform: "darwin" })).toBe("EasyParcel CLI on Zhik-MBP (macOS)");
+    expect(describeDevice({ hostname: "build-01", platform: "linux" })).toBe("EasyParcel CLI on build-01 (Linux)");
+  });
+  it("falls back to the OS alone without a host name", () => {
+    expect(describeDevice({ hostname: "", platform: "win32" })).toBe("EasyParcel CLI (Windows)");
   });
 });

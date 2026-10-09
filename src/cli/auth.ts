@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import * as readline from "node:readline/promises";
+import { Writable } from "node:stream";
 import { getContext } from "../core/context";
 import { addGlobalOptions } from "./global";
 import { CliError, ExitCode } from "../core/errors";
@@ -15,6 +16,7 @@ import {
   exchangeCode,
   clientCredentials,
   requestDeviceAuthorization,
+  describeDevice,
   pollForDeviceToken,
   revokeToken,
   detectHeadless,
@@ -218,8 +220,51 @@ export function prepareWithToken(raw: string): { token: string; masked: string }
   return { token, masked: maskToken(token) };
 }
 
+/**
+ * Prompt for a token on a terminal without echoing it. readline writes through a sink that
+ * passes on only the prompt, so the characters typed after it never reach the screen.
+ */
+export async function readHiddenToken(
+  prompt: string,
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stderr,
+): Promise<string> {
+  let muted = false;
+  const sink = new Writable({
+    write(chunk, _enc, cb) {
+      if (!muted) output.write(chunk);
+      cb();
+    },
+  });
+  const rl = readline.createInterface({ input: input as NodeJS.ReadableStream & { fd?: number }, output: sink, terminal: true });
+  const abort = new AbortController();
+  rl.on("SIGINT", () => abort.abort());
+  try {
+    const answer = rl.question(prompt, { signal: abort.signal });
+    muted = true;
+    return (await answer).trim();
+  } catch (e) {
+    if ((e as Error).name === "AbortError") throw new CliError("Cancelled.", ExitCode.USAGE);
+    throw e;
+  } finally {
+    rl.close();
+    output.write("\n");
+  }
+}
+
 async function withTokenLogin(ctx: RuntimeContext, opts: Record<string, any>): Promise<void> {
-  const raw = await readStdinToken();
+  let raw: string;
+  if (process.stdin.isTTY) {
+    if (opts.nonInteractive) {
+      throw new CliError(
+        "--with-token reads the token from stdin. Pipe it in: `printf %s \"$EASYPARCEL_TOKEN\" | ep login --with-token`.",
+        ExitCode.USAGE,
+      );
+    }
+    raw = await readHiddenToken("? Paste a personal access token (epat_…): ");
+  } else {
+    raw = await readStdinToken();
+  }
   const { token, masked } = prepareWithToken(raw);
   if (!token.startsWith("epat_")) {
     log.warn("Token does not start with 'epat_'; personal access tokens use that prefix. Continuing.");
@@ -249,7 +294,12 @@ async function deviceLogin(
   client: ClientCreds,
   o: { scope?: string; all: boolean; json: boolean },
 ): Promise<void> {
-  const da = await requestDeviceAuthorization({ baseUrl: ctx.baseUrl, clientId: client.clientId, scope: o.scope });
+  const da = await requestDeviceAuthorization({
+    baseUrl: ctx.baseUrl,
+    clientId: client.clientId,
+    scope: o.scope,
+    deviceName: describeDevice(),
+  });
   // Human prompt on stderr (stdout stays clean for the final result JSON).
   log.info("To sign in, open the URL on any device and enter the code:");
   process.stderr.write(`\n  URL:  ${da.verification_uri}\n  Code: ${da.user_code}\n`);
@@ -257,16 +307,20 @@ async function deviceLogin(
     process.stderr.write(`\n  Or open directly: ${da.verification_uri_complete}\n`);
   }
   process.stderr.write("\nWaiting for authorization…\n");
+  // stdout carries exactly one JSON object (the final result), so the pending notice an
+  // agent needs to relay the code goes to stderr.
   if (o.json) {
-    printJson({
-      status: "authorization_pending",
-      grant: "device_code",
-      user_code: da.user_code,
-      verification_uri: da.verification_uri,
-      verification_uri_complete: da.verification_uri_complete ?? null,
-      expires_in: da.expires_in,
-      interval: da.interval,
-    });
+    process.stderr.write(
+      JSON.stringify({
+        status: "authorization_pending",
+        grant: "device_code",
+        user_code: da.user_code,
+        verification_uri: da.verification_uri,
+        verification_uri_complete: da.verification_uri_complete ?? null,
+        expires_in: da.expires_in,
+        interval: da.interval,
+      }) + "\n",
+    );
   }
   const tr = await pollForDeviceToken({
     baseUrl: ctx.baseUrl,
@@ -320,10 +374,9 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
     return;
   }
 
-  // Random free loopback port (RFC 8252); keep the registered 8788 only as a fallback.
-  const explicitPort = opts.port != null;
-  const port = explicitPort ? Number(opts.port) : 0;
-  const fallbackPort = explicitPort ? undefined : DEFAULT_CALLBACK_PORT;
+  // The server matches redirect URIs exactly and the CLI app registers only port 8788, so a
+  // random port (`--port 0`, RFC 8252) works only once the server accepts any loopback port.
+  const port = opts.port != null ? Number(opts.port) : DEFAULT_CALLBACK_PORT;
   const state = randomState();
   const pkce = generatePkce();
   const waitMs = Number(opts.wait ?? 300) * 1000;
@@ -337,7 +390,7 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
         ExitCode.USAGE,
       );
     }
-    const redirectUri = opts.redirectUri || `http://localhost:${explicitPort ? port : DEFAULT_CALLBACK_PORT}/callback`;
+    const redirectUri = opts.redirectUri || `http://localhost:${port || DEFAULT_CALLBACK_PORT}/callback`;
     const url = buildAuthUrl({ baseUrl: ctx.baseUrl, clientId: client.clientId, redirectUri, challenge: pkce.challenge, state, scope });
     log.info("Open this URL in a browser to authorize:");
     process.stderr.write("\n  " + url + "\n\n");
@@ -362,7 +415,7 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
   }
 
   // --- browser + loopback callback ---
-  const server = await startLoopbackServer({ state, port, fallbackPort });
+  const server = await startLoopbackServer({ state, port });
   const redirectUri = opts.redirectUri || server.redirectUri;
   const url = buildAuthUrl({ baseUrl: ctx.baseUrl, clientId: client.clientId, redirectUri, challenge: pkce.challenge, state, scope });
   log.info(`Waiting for authorization on ${server.redirectUri}`);
@@ -501,7 +554,7 @@ function attachLoginOptions(cmd: Command): Command {
     .option("--all", "Authorize ALL accounts you belong to and save one profile per account")
     .option("--no-browser", "Print the URL and paste the redirect code back (headless)")
     .option("--redirect-uri <uri>", "Override the redirect URI (must be registered)")
-    .option("--port <port>", `Loopback callback port (default: a random free port, ${DEFAULT_CALLBACK_PORT} fallback)`)
+    .option("--port <port>", `Loopback callback port (default ${DEFAULT_CALLBACK_PORT}; 0 = a random free port, once the server allows it)`)
     .option("--scope <scope>", "OAuth scope (usually empty for this API)")
     .option("--json", "Emit machine-readable JSON status (for agents/CI)")
     .option("--non-interactive", "Never prompt; fail instead of waiting for interactive input")
@@ -509,7 +562,7 @@ function attachLoginOptions(cmd: Command): Command {
 }
 
 const LOGIN_DESCRIPTION =
-  "Sign in to EasyParcel. Default: browser OAuth2 + PKCE on a random loopback port. " +
+  `Sign in to EasyParcel. Default: browser OAuth2 + PKCE on loopback port ${DEFAULT_CALLBACK_PORT}. ` +
   "Use --device for a no-browser device code (auto over SSH), or --with-token for a piped epat_ token.";
 
 export function registerAuth(program: Command): void {

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import http from "node:http";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { rawRequest, sleep } from "./http";
 import { CliError, ExitCode } from "./errors";
@@ -186,14 +187,25 @@ export interface DeviceAuthorization {
   interval: number;
 }
 
+/** "EasyParcel CLI on <host> (<OS>)": the self-reported label on the device approval page. */
+export function describeDevice(
+  p: { hostname: string; platform: NodeJS.Platform } = { hostname: os.hostname(), platform: process.platform },
+): string {
+  const host = String(p.hostname || "").replace(/\.local$/i, "").trim();
+  const osName = ({ darwin: "macOS", win32: "Windows", linux: "Linux" } as Record<string, string>)[p.platform] || p.platform;
+  return host ? `EasyParcel CLI on ${host} (${osName})` : `EasyParcel CLI (${osName})`;
+}
+
 /** Start a device-code flow: POST {base}/oauth/device_authorization (RFC 8628 §3.1–3.2). */
 export async function requestDeviceAuthorization(p: {
   baseUrl: string;
   clientId: string;
   scope?: string;
+  deviceName?: string;
 }): Promise<DeviceAuthorization> {
   const body = new URLSearchParams({ client_id: p.clientId });
   if (p.scope) body.set("scope", p.scope);
+  if (p.deviceName) body.set("device_name", p.deviceName);
   const { status, json } = await rawTokenPost(p.baseUrl, "/oauth/device_authorization", body, p.clientId);
   const d = json?.device_code ? json : json?.data?.device_code ? json.data : null;
   if (status >= 400 || json?.error || !d) {

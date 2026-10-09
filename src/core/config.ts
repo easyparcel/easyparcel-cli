@@ -22,13 +22,19 @@ export const DEFAULT_CALLBACK_PORT = 8788;
  * cannot be used without a user completing the PKCE-protected consent flow.
  * The built-in secret is only used when the client id is the built-in one.
  *
- * TODO(easyparcel): replace BOTH with the official "EasyParcel CLI" app's
- * credentials (registered with redirect URI http://localhost:8788/callback).
- * If/when the backend supports public (PKCE-only) clients, set
- * DEFAULT_CLIENT_SECRET back to "". Override at runtime via --client-id /
- * --client-secret / EASYPARCEL_CLIENT_ID / `ep config set client_id <id>`.
+ * This is the official public "EasyParcel CLI" app (empty secret; redirect URIs
+ * http://localhost:8788/callback and http://127.0.0.1:8788/callback; registered by
+ * ep_internal_api migrations/2026-10-09-register-cli-oauth-app-official.sql).
+ * Override at runtime via --client-id / --client-secret / EASYPARCEL_CLIENT_ID /
+ * `ep config set client_id <id>`.
  */
-export const DEFAULT_CLIENT_ID = "675a19ed-bb9b-4e88-b3e6-9b1b46ce745c";
+export const DEFAULT_CLIENT_ID = "3cc227a9-4700-4fe9-a382-09a975104019";
+/**
+ * The hosted MCP broker's own confidential client (it authenticates upstream with
+ * EASYPARCEL_CLIENT_SECRET). Kept separate so the CLI's public app never carries the
+ * broker's redirect URI or secret.
+ */
+export const MCP_BROKER_CLIENT_ID = "675a19ed-bb9b-4e88-b3e6-9b1b46ce745c";
 // Intentionally empty: do NOT commit a real client secret here (it would ship in
 // the published package). Provide it at runtime instead — EASYPARCEL_CLIENT_SECRET,
 // --client-secret, or `ep auth login` against a public/PKCE client. See README.

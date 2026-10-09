@@ -7,7 +7,7 @@ import { buildServer } from "./server";
 import { createOAuthProxy, DEFAULT_TRUSTED_REDIRECT_HOSTS, type OAuthProxy } from "./oauth";
 import { createOAuthStore, seedOAuthClients, type OAuthStore } from "./store";
 import { getContext } from "../core/context";
-import { DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET } from "../core/config";
+import { MCP_BROKER_CLIENT_ID, DEFAULT_CLIENT_SECRET } from "../core/config";
 import { log } from "../core/logger";
 
 export interface HttpMcpOptions {
@@ -111,11 +111,11 @@ export async function runHttpMcpServer(opts: HttpMcpOptions): Promise<void> {
 
   // Per-source attribution: the upstream EasyParcel client this proxy authenticates as.
   // Run one deployment per source (ChatGPT / Claude / …) with its own --ep-client-id.
-  const epClientId = opts.epClientId || process.env.EASYPARCEL_CLIENT_ID || DEFAULT_CLIENT_ID;
+  const epClientId = opts.epClientId || process.env.EASYPARCEL_CLIENT_ID || MCP_BROKER_CLIENT_ID;
   const epClientSecret =
     opts.epClientSecret ||
     process.env.EASYPARCEL_CLIENT_SECRET ||
-    (epClientId === DEFAULT_CLIENT_ID ? DEFAULT_CLIENT_SECRET || undefined : undefined);
+    (epClientId === MCP_BROKER_CLIENT_ID ? DEFAULT_CLIENT_SECRET || undefined : undefined);
 
   // OAuth proxy state store: Redis (durable across rollouts + multi-replica) when
   // EP_MCP_REDIS_URL/REDIS_URL is set, else in-memory. Namespaced per upstream client id so the
