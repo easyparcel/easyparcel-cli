@@ -41,12 +41,21 @@ On macOS/Linux, make it runnable first: `chmod +x easyparcel-*`.
 ```bash
 ep auth login
 ```
-Your browser opens, you approve, done — tokens are saved securely on your machine. No app
-registration, no API keys to copy.
+Your browser opens, you approve, done — tokens are saved in your OS keychain (or a private
+file where there is none). No app registration, no API keys to copy.
 
-Check anytime:
+No browser on this machine (SSH, a server, a container)? Use the device code — the CLI shows a
+short code, you approve it from any browser, and it picks this up automatically:
+```bash
+ep login --device
+```
+The approval page names the computer (`EasyParcel CLI on <host>`); set `EASYPARCEL_DEVICE_NAME`
+to show a different label. Only approve codes you started yourself.
+
+Check anytime, and sign out (this also revokes the session on the server):
 ```bash
 ep auth status
+ep logout
 ```
 
 **Have more than one EasyParcel account** (e.g. a Malaysia account in MYR and a Singapore
@@ -147,6 +156,12 @@ Set a token in the environment and the CLI runs fully unattended:
 export EASYPARCEL_ACCESS_TOKEN=...     # (and EASYPARCEL_REFRESH_TOKEN to auto‑renew)
 ep wallet
 ```
+To check a token before a job uses it, pipe it in — it is validated and never written to disk:
+```bash
+printf %s "$EASYPARCEL_TOKEN" | ep login --with-token
+```
+`ep login --non-interactive` refuses anything that would wait for a person (browser or device
+approval), so a misconfigured job fails fast instead of hanging.
 
 ---
 
@@ -163,7 +178,9 @@ binary, it points you to the latest release. The `npx … mcp` setup auto‑uses
 
 ## Good to know
 
-- **Where things are saved:** `~/.easyparcel/` (config + login tokens, readable only by you).
+- **Where things are saved:** config in `~/.easyparcel/`; login tokens in the OS keychain
+  (`ep auth status` shows `"storage"`), or in `~/.easyparcel/credentials.json` (readable only by
+  you) on machines without one.
 - **Demo vs live:** you're using whichever EasyParcel account you logged in with.
 - **Exit codes** (for scripts): `0` ok · `3` not logged in · `4` not found · `5` bad input ·
   `6` rate‑limited · `7` some batch items failed.

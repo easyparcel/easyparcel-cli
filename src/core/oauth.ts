@@ -294,6 +294,7 @@ export async function pollForDeviceToken(opts: DevicePollOptions): Promise<Token
 
   let interval = Math.max(1, opts.interval || 5);
   const deadline = now() + (opts.expiresIn > 0 ? opts.expiresIn : 600) * 1000;
+  let networkFailures = 0;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -301,8 +302,22 @@ export async function pollForDeviceToken(opts: DevicePollOptions): Promise<Token
       throw new CliError("Device code expired before authorization. Run `ep login --device` again.", ExitCode.AUTH);
     }
     await sleepFn(interval * 1000);
-    const body = new URLSearchParams({ grant_type: DEVICE_GRANT_TYPE, device_code: opts.deviceCode });
-    const { status, json } = await poster(body);
+    // client_id travels with every poll (RFC 8628 §3.4); the server refuses a poll without it.
+    const body = new URLSearchParams({ grant_type: DEVICE_GRANT_TYPE, device_code: opts.deviceCode, client_id: opts.clientId });
+    let polled: { status: number; json: any };
+    try {
+      polled = await poster(body);
+      networkFailures = 0;
+    } catch (e) {
+      // A dropped connection is not an answer from the server: keep polling for a few more
+      // rounds before giving up on a login the user may be approving right now.
+      if (++networkFailures >= 3) {
+        throw new CliError(`Device authorization failed: could not reach the token endpoint (${(e as Error).message})`, ExitCode.AUTH);
+      }
+      log.debug(`device poll request failed (${networkFailures}/3): ${(e as Error).message}`);
+      continue;
+    }
+    const { status, json } = polled;
     const result = interpretDeviceToken(status, json);
     switch (result.status) {
       case "approved":
@@ -395,6 +410,11 @@ export interface LoopbackServer {
   close(): void;
 }
 
+/** The callback page echoes query values the browser was sent with, so they must not become markup. */
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+}
+
 function htmlPage(message: string, ok: boolean): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>EasyParcel CLI</title>
 <style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;height:100vh;
@@ -434,7 +454,7 @@ export function startLoopbackServer(opts: {
 
       if (error) {
         res.writeHead(400, { "Content-Type": "text/html" });
-        res.end(htmlPage(`Authorization error: ${error}`, false));
+        res.end(htmlPage(`Authorization error: ${escapeHtml(error)}`, false));
         rejectCode(new CliError(`Authorization denied: ${error}`, ExitCode.AUTH));
         return;
       }
@@ -487,13 +507,17 @@ export function startLoopbackServer(opts: {
           server.close();
         },
         waitForCode: (timeoutMs: number) => {
-          const timeout = new Promise<never>((_, rej) =>
-            setTimeout(
+          let timer: NodeJS.Timeout | undefined;
+          const timeout = new Promise<never>((_, rej) => {
+            timer = setTimeout(
               () => rej(new CliError("Timed out waiting for browser authorization", ExitCode.AUTH)),
               timeoutMs,
-            ),
-          );
-          return Promise.race([codePromise, timeout]);
+            );
+          });
+          // Clear the timer once the code arrives, or the process idles until it fires (up to --wait).
+          return Promise.race([codePromise, timeout]).finally(() => {
+            if (timer) clearTimeout(timer);
+          });
         },
       });
     }

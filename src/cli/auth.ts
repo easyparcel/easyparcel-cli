@@ -272,7 +272,9 @@ async function withTokenLogin(ctx: RuntimeContext, opts: Record<string, any>): P
   let verified: boolean | null = null;
   if (opts.verify !== false) {
     try {
-      const env = await apiRequest(ctx, { method: "GET", path: "account/get_account_information" });
+      // Verify THIS token: passing it explicitly also disables the 401 → refresh retry, which
+      // would otherwise answer with the stored profile's refresh token and report a bad token as fine.
+      const env = await apiRequest(ctx, { method: "GET", path: "account/get_account_information", accessToken: token });
       verified = (env.status_code ?? 0) < 400;
     } catch {
       verified = false;
@@ -298,7 +300,9 @@ async function deviceLogin(
     baseUrl: ctx.baseUrl,
     clientId: client.clientId,
     scope: o.scope,
-    deviceName: describeDevice(),
+    // The label on the approval page. The default carries the machine's host name; set
+    // EASYPARCEL_DEVICE_NAME to show something else.
+    deviceName: process.env.EASYPARCEL_DEVICE_NAME?.trim() || describeDevice(),
   });
   // Human prompt on stderr (stdout stays clean for the final result JSON).
   log.info("To sign in, open the URL on any device and enter the code:");
@@ -347,6 +351,15 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
 
   const client = resolveClient(ctx, opts);
 
+  // Every remaining flow except client_credentials waits for a person (browser or device
+  // approval), which is exactly what --non-interactive promises not to do.
+  if (nonInteractive && !opts.clientCredentials) {
+    throw new CliError(
+      "--non-interactive cannot wait for a browser or device approval. Pipe a token with --with-token, or use --client-credentials for a confidential app.",
+      ExitCode.USAGE,
+    );
+  }
+
   // --- client_credentials: no browser at all ---
   if (opts.clientCredentials) {
     if (!client.clientSecret) {
@@ -374,9 +387,12 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
     return;
   }
 
-  // The server matches redirect URIs exactly and the CLI app registers only port 8788, so a
-  // random port (`--port 0`, RFC 8252) works only once the server accepts any loopback port.
+  // The server matches redirect URIs exactly and the CLI app registers only port 8788, so
+  // another port only works together with --redirect-uri on an app that registered it.
   const port = opts.port != null ? Number(opts.port) : DEFAULT_CALLBACK_PORT;
+  if (port !== DEFAULT_CALLBACK_PORT && !opts.redirectUri) {
+    log.warn(`Port ${port} is not registered for this app; the server will reject the callback unless --redirect-uri names a registered URI.`);
+  }
   const state = randomState();
   const pkce = generatePkce();
   const waitMs = Number(opts.wait ?? 300) * 1000;
@@ -386,7 +402,7 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
   if (opts.browser === false) {
     if (nonInteractive) {
       throw new CliError(
-        "--no-browser needs an interactive paste. Use --device or --with-token for non-interactive login.",
+        "--no-browser needs an interactive paste. Pipe a token with --with-token for non-interactive login.",
         ExitCode.USAGE,
       );
     }
@@ -464,7 +480,8 @@ function statusAction(): void {
     has_refresh_token: Boolean(creds.refresh_token),
     expires_at: creds.expires_at ?? null,
     access_token_expired: creds.access_token ? isExpired(creds.expires_at) : null,
-    storage: keychainAvailable() ? "keychain" : "file",
+    // Where THIS profile's tokens live, not what the machine could do.
+    storage: loadStore().profiles[ctx.profile]?.storage ?? (keychainAvailable() ? "keychain" : "file"),
     profiles: listProfiles(),
   });
   if (!authenticated) process.exitCode = ExitCode.AUTH;
@@ -554,7 +571,7 @@ function attachLoginOptions(cmd: Command): Command {
     .option("--all", "Authorize ALL accounts you belong to and save one profile per account")
     .option("--no-browser", "Print the URL and paste the redirect code back (headless)")
     .option("--redirect-uri <uri>", "Override the redirect URI (must be registered)")
-    .option("--port <port>", `Loopback callback port (default ${DEFAULT_CALLBACK_PORT}; 0 = a random free port, once the server allows it)`)
+    .option("--port <port>", `Loopback callback port (default ${DEFAULT_CALLBACK_PORT}, the only port registered for the built-in app; others need --redirect-uri)`)
     .option("--scope <scope>", "OAuth scope (usually empty for this API)")
     .option("--json", "Emit machine-readable JSON status (for agents/CI)")
     .option("--non-interactive", "Never prompt; fail instead of waiting for interactive input")

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { credentialsPath } from "./paths";
 import { ensureConfigDir } from "./config";
 import { keychainAvailable, keychainGet, keychainSet, keychainDelete } from "./keychain";
+import { log } from "./logger";
 import type { CredentialStore, ProfileCredentials } from "./types";
 
 // Credential storage with two backends:
@@ -17,6 +18,10 @@ import type { CredentialStore, ProfileCredentials } from "./types";
 
 /** Secret fields kept out of the plaintext file when a keychain is present. */
 const SECRET_KEYS = ["access_token", "refresh_token", "client_secret"] as const;
+
+// Profiles already warned about in this process: a credential read happens several times per
+// command, and one warning is enough.
+const warnedUnreadable = new Set<string>();
 
 function keychainAccount(profile: string): string {
   return `profile:${profile}`;
@@ -100,7 +105,13 @@ function readStoredProfile(profile: string): ProfileCredentials {
         return rest as ProfileCredentials;
       }
     }
-    // Keychain entry missing (e.g. creds file copied to another machine) → metadata only.
+    // Keychain entry missing or unreadable (creds file copied to another machine, or this
+    // process was denied the item) → metadata only. Say so, or it just looks like "not logged in";
+    // once per process, and not when an env token makes the stored profile irrelevant.
+    if (!warnedUnreadable.has(profile) && !hasEnvAccessToken()) {
+      warnedUnreadable.add(profile);
+      log.warn(`Profile '${profile}' keeps its tokens in the OS keychain, but the entry could not be read. Run \`ep login\` again.`);
+    }
     return rest as ProfileCredentials;
   }
   return rest as ProfileCredentials;
@@ -123,6 +134,9 @@ export function setProfileCredentials(profile: string, creds: ProfileCredentials
     store.profiles[profile] = { ...nonSecret, storage: "keychain" };
   } else {
     // No keychain (or write failed) → persist everything to the 0600 file.
+    if (hasSecret && keychainAvailable()) {
+      log.warn("Could not write to the OS keychain; the tokens were saved to the credentials file (mode 0600) instead.");
+    }
     store.profiles[profile] = { ...merged, storage: "file" };
     // Drop any stale keychain entry so the file stays the single source of truth.
     if (keychainAvailable()) keychainDelete(keychainAccount(profile));

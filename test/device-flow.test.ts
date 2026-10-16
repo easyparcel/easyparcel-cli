@@ -40,6 +40,7 @@ describe("pollForDeviceToken", () => {
     ];
     let i = 0;
     const ticks: number[] = [];
+    const bodies: URLSearchParams[] = [];
     const token = await pollForDeviceToken({
       baseUrl: "https://api.test",
       clientId: "c",
@@ -47,12 +48,51 @@ describe("pollForDeviceToken", () => {
       interval: 5,
       expiresIn: 600,
       sleep: noSleep,
-      poster: async () => responses[i++],
+      poster: async (body) => {
+        bodies.push(body);
+        return responses[i++];
+      },
       onTick: (n) => ticks.push(n),
     });
     expect(token.access_token).toBe("tok");
     expect(ticks).toEqual([5, 10]); // pending at 5, slow_down bumps to 10
     expect(i).toBe(3);
+    // RFC 8628 §3.4: every poll names the client.
+    expect(bodies[0].get("client_id")).toBe("c");
+    expect(bodies[0].get("device_code")).toBe("dc");
+  });
+
+  it("keeps polling through a couple of network failures, then gives up on the third in a row", async () => {
+    let calls = 0;
+    const token = await pollForDeviceToken({
+      baseUrl: "x",
+      clientId: "c",
+      deviceCode: "dc",
+      interval: 1,
+      expiresIn: 600,
+      sleep: noSleep,
+      poster: async () => {
+        calls++;
+        if (calls <= 2) throw new Error("ECONNRESET");
+        return { status: 200, json: { access_token: "tok", token_type: "Bearer" } };
+      },
+    });
+    expect(token.access_token).toBe("tok");
+    expect(calls).toBe(3);
+
+    await expect(
+      pollForDeviceToken({
+        baseUrl: "x",
+        clientId: "c",
+        deviceCode: "dc",
+        interval: 1,
+        expiresIn: 600,
+        sleep: noSleep,
+        poster: async () => {
+          throw new Error("ECONNRESET");
+        },
+      }),
+    ).rejects.toThrow(/could not reach/i);
   });
 
   it("rejects with an AUTH error when the device authorization is denied", async () => {
