@@ -63,6 +63,10 @@ account in SGD)? Log them all in at once:
 ```bash
 ep auth login --all
 ```
+Created another account later? Add it without logging in again:
+```bash
+ep auth sync
+```
 Then pick which to use per command (currency follows the account):
 ```bash
 ep --profile sg +rates --from 049483 --to 018956 --weight 1   # quotes in SGD

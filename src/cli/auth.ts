@@ -64,10 +64,46 @@ function resolveClient(ctx: RuntimeContext, opts: Record<string, any>): ClientCr
   return { clientId, clientSecret };
 }
 
+/** The shipping account a token is bound to, read from the access JWT's own claims (no network). */
+export function accountIdFromToken(accessToken?: string): number | string | undefined {
+  try {
+    const payload = JSON.parse(Buffer.from(String(accessToken).split(".")[1], "base64url").toString("utf8"));
+    const id = payload?.user?.account_id;
+    return id === undefined || id === null || id === "" ? undefined : id;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Decide what `ep auth sync` has to do: owned accounts with no profile get one, profiles whose
+ * account is no longer owned are reported (never deleted). Pure, so it is unit-testable.
+ */
+export function planAccountSync(
+  accounts: Array<{ account_id: number | string; name?: unknown; is_current?: boolean }>,
+  profiles: Record<string, { account_id?: number | string; access_token?: string }>,
+): {
+  add: Array<{ account_id: number | string; name?: unknown }>;
+  existing: Array<{ account_id: number | string; profile: string }>;
+  stale: Array<{ account_id: number | string; profile: string }>;
+} {
+  const byAccount = new Map<string, string>();
+  for (const [profile, rec] of Object.entries(profiles)) {
+    const id = rec.account_id ?? accountIdFromToken(rec.access_token);
+    if (id !== undefined && !byAccount.has(String(id))) byAccount.set(String(id), profile);
+  }
+  const owned = new Set(accounts.map((a) => String(a.account_id)));
+  return {
+    add: accounts.filter((a) => !byAccount.has(String(a.account_id))).map((a) => ({ account_id: a.account_id, name: a.name })),
+    existing: accounts.filter((a) => byAccount.has(String(a.account_id))).map((a) => ({ account_id: a.account_id, profile: byAccount.get(String(a.account_id))! })),
+    stale: [...byAccount.entries()].filter(([id]) => !owned.has(id)).map(([id, profile]) => ({ account_id: id, profile })),
+  };
+}
+
 function persistLogin(ctx: RuntimeContext, tr: TokenResponse, client: ClientCreds, grant: string): void {
   setProfileCredentials(
     ctx.profile,
-    tokensFromResponse(tr, { client_id: client.clientId, client_secret: client.clientSecret }),
+    tokensFromResponse(tr, { client_id: client.clientId, client_secret: client.clientSecret, account_id: accountIdFromToken(tr.access_token) }),
   );
   log.info(`Authenticated profile '${ctx.profile}' via ${grant}.`);
   printJson({
@@ -143,7 +179,7 @@ async function authorizeAllAccounts(
     }
     setProfileCredentials(
       slug,
-      tokensFromResponse(tr, { client_id: client.clientId, client_secret: client.clientSecret, account_label: String(acc.name) }),
+      tokensFromResponse(tr, { client_id: client.clientId, client_secret: client.clientSecret, account_label: String(acc.name), account_id: acc.account_id }),
     );
     created.push({ account: acc.name, account_id: acc.account_id, profile: slug, current: Boolean(acc.is_current) });
   }
@@ -551,6 +587,52 @@ async function logoutAction(opts: Record<string, any>): Promise<void> {
   });
 }
 
+/**
+ * `ep auth sync`: with the session you already have, add a profile for every shipping account you
+ * own that has none yet — no browser, no device approval. Uses the same list_accounts /
+ * switch_token endpoints as `ep login --all`; the server only hands out tokens for owned accounts.
+ */
+async function syncAccountsAction(opts: Record<string, any>): Promise<void> {
+  const ctx = getContext();
+  const creds = getProfileCredentials(ctx.profile);
+  if (!creds.access_token && !creds.refresh_token) {
+    throw new CliError(`Profile '${ctx.profile}' is not signed in. Run \`ep login\` first.`, ExitCode.AUTH);
+  }
+  const client = resolveClient(ctx, opts);
+  const listEnv = await apiRequest(ctx, { method: "GET", path: "account/list_accounts" });
+  if ((listEnv.status_code ?? 0) >= 400 || !Array.isArray(listEnv.data)) {
+    throw new CliError(`Could not list your accounts: ${listEnv.message || `HTTP ${listEnv.status_code}`}`, ExitCode.AUTH);
+  }
+  const accounts = listEnv.data as Array<{ account_id: number | string; name?: unknown; is_current?: boolean }>;
+  // Full records (keychain included) so a profile saved before account_id was stored still counts.
+  const store = loadStore();
+  const profiles: Record<string, { account_id?: number | string; access_token?: string }> = {};
+  for (const name of Object.keys(store.profiles)) profiles[name] = getProfileCredentials(name);
+  const plan = planAccountSync(accounts, profiles);
+
+  const used = new Set(Object.keys(store.profiles));
+  const added: Array<{ account: unknown; account_id: number | string; profile: string }> = [];
+  const failed: Array<{ account_id: number | string; reason: string }> = [];
+  for (const acc of plan.add) {
+    const env = await apiRequest(ctx, { method: "POST", path: "account/switch_token", body: { account_id: acc.account_id } });
+    const data = env.data as any;
+    if ((env.status_code ?? 0) >= 400 || !data || !data.access_token) {
+      failed.push({ account_id: acc.account_id, reason: env.message || "could not mint token" });
+      continue;
+    }
+    const slug = uniqueSlug(acc.name, acc.account_id, used);
+    setProfileCredentials(
+      slug,
+      tokensFromResponse(data as TokenResponse, { client_id: client.clientId, client_secret: client.clientSecret, account_label: String(acc.name ?? ""), account_id: acc.account_id }),
+    );
+    added.push({ account: acc.name, account_id: acc.account_id, profile: slug });
+  }
+  for (const s of plan.stale) log.warn(`Profile '${s.profile}' is bound to account ${s.account_id}, which you no longer own; run \`ep logout --profile ${s.profile}\` to drop it.`);
+  log.info(`${added.length} account(s) added, ${plan.existing.length} already had a profile, ${plan.stale.length} stale.`);
+  printJson({ status: failed.length ? "partial" : "ok", added, existing: plan.existing, stale: plan.stale, failed });
+  if (failed.length) process.exitCode = ExitCode.AUTH;
+}
+
 async function whoamiAction(): Promise<void> {
   const ctx = getContext();
   const env = await apiRequest(ctx, { method: "GET", path: "account/get_account_information" });
@@ -591,6 +673,13 @@ export function registerAuth(program: Command): void {
     statusAction,
   );
   addGlobalOptions(auth.command("refresh").description("Force an access-token refresh")).action(refreshAction);
+  addGlobalOptions(
+    auth
+      .command("sync")
+      .description("Add a profile for each shipping account you own that has none yet, using the current session (no new approval)")
+      .option("--client-id <id>", "Override the built-in OAuth client id")
+      .option("--client-secret <secret>", "OAuth client secret (only for confidential/custom apps)"),
+  ).action(syncAccountsAction);
   addGlobalOptions(
     auth
       .command("logout")

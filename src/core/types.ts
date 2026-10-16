@@ -28,6 +28,8 @@ export interface ProfileCredentials {
   scope?: string;
   /** Human label for the connected account (best-effort). */
   account_label?: string;
+  /** The shipping account this profile's token is bound to (from the token itself). */
+  account_id?: number | string;
   /**
    * Internal marker: which backend holds this profile's secret fields.
    * "keychain" → access/refresh/client_secret live in the OS keychain and are
