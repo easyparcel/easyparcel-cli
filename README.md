@@ -71,7 +71,7 @@ On a terminal `ep auth status` prints that one line; piped (or with `--format js
 account in SGD)? Sign in once and choose **All my shipping accounts** on the approval page.
 Then list what the login reaches and name the account per command:
 ```bash
-ep account list                                   # ACCOUNT_ID NAME TYPE COUNTRY CURRENCY DEFAULT
+ep account list                                   # ACCOUNT_ID NAME TYPE COUNTRY CURRENCY DEFAULT …
 ep +rates --account 123456 --from 049483 --to 018956 --weight 1   # quotes in SGD
 ep wallet --account 654321                        # MYR balance
 ```
@@ -138,6 +138,7 @@ Ids are never guessed: each command's help lists the values to fetch first, for 
 Before you call this (fetch these values first, never guess them):
   awb_numbers  ← ep shipment list  ([].awb_number)
   awb_numbers  ← ep shipment submit  ([].shipments[].awb_number)  when just booked
+  awb_numbers  ← ep shipment details  ([].shipment_details.awb_number)  when you only have the shipment number
   account_id   ← ep account list  ([].account_id)  when the login covers all your accounts. Pass it as --account <id> (MCP: account_id).
 ```
 The same edges are in `ep describe` (`prerequisites`) and in every MCP tool description.

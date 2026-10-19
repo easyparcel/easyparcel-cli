@@ -22,7 +22,7 @@ The response lists `quotations[]` per shipment; each has `courier.service_id`, `
 
 ### 2. (Optional) Coupons, insurance, drop-off
 - Coupons for a prospective shipment: `ep shipment coupon-list --data @order.json` → apply by adding `"coupon_codes": ["CODE"]` to the submit body.
-- Insurance pricing: `ep shipment insurance-quote --data @ins.json` → take `insurance_service_id` and add it to the submit body.
+- Insurance pricing: `ep shipment insurance-quote --data @ins.json` shows the price only. To insure a shipment set `feature.add_on_easy_cover: true` in the submit body; an `insurance[]` list there is ignored (the API adds the courier's mandatory cover plus EasyCover).
 - Couriers for a country: `ep courier list --data '{"country_code":"MY"}'`.
 - Drop-off points: `ep courier dropoff-points --data @dropoff.json` (courier_id from `ep courier list` or the quote) → put the `point_id` in `sender.point_code` to drop the parcel off instead of a pickup.
 - Parcel categories (DDP): `ep shipment parcel-categories` → `id` is the `parcel_category_id`.
