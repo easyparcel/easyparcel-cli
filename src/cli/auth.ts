@@ -6,7 +6,7 @@ import { addGlobalOptions } from "./global";
 import { CliError, ExitCode } from "../core/errors";
 import { log } from "../core/logger";
 import { printJson } from "../core/output";
-import { DEFAULT_CALLBACK_PORT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, loadConfig, saveConfig } from "../core/config";
+import { DEFAULT_CALLBACK_PORT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, MCP_BROKER_CLIENT_ID, loadConfig, saveConfig } from "../core/config";
 import {
   startLoopbackServer,
   buildAuthUrl,
@@ -42,16 +42,24 @@ interface ClientCreds {
   clientSecret?: string;
 }
 
-function resolveClient(ctx: RuntimeContext, opts: Record<string, any>): ClientCreds {
+export function resolveClient(ctx: RuntimeContext, opts: Record<string, any>): ClientCreds {
   const stored = getProfileCredentials(ctx.profile);
-  // Precedence: flag > env > stored > config override > built-in public client.
+  // A client id stored by an older CLI (≤ 0.1.10 defaulted to the hosted broker's confidential
+  // app) must not drive a NEW login: the device grant refuses it as non-public. Only an explicit
+  // flag or env may still name it.
+  const legacyStored = stored.client_id === MCP_BROKER_CLIENT_ID;
+  if (legacyStored && !opts.clientId && !process.env.EASYPARCEL_CLIENT_ID) {
+    log.warn(`Ignoring the client id stored by an older CLI version (${MCP_BROKER_CLIENT_ID.slice(0, 8)}…); signing in as the EasyParcel CLI app.`);
+  }
+  const storedClientId = legacyStored ? undefined : stored.client_id;
+  // Precedence: flag > env > stored (unless legacy) > config override > built-in public client.
   const clientId =
     opts.clientId ||
     process.env.EASYPARCEL_CLIENT_ID ||
-    stored.client_id ||
+    storedClientId ||
     ctx.config.client_id ||
     DEFAULT_CLIENT_ID;
-  let clientSecret = opts.clientSecret || process.env.EASYPARCEL_CLIENT_SECRET || stored.client_secret;
+  let clientSecret = opts.clientSecret || process.env.EASYPARCEL_CLIENT_SECRET || (storedClientId ? stored.client_secret : undefined);
   // Use the built-in secret only when running as the built-in client.
   if (!clientSecret && clientId === DEFAULT_CLIENT_ID && DEFAULT_CLIENT_SECRET) {
     clientSecret = DEFAULT_CLIENT_SECRET;

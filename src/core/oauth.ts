@@ -197,6 +197,20 @@ export function describeDevice(
 }
 
 /** Start a device-code flow: POST {base}/oauth/device_authorization (RFC 8628 §3.1–3.2). */
+/**
+ * The human-readable reason in an OAuth error, whichever envelope carried it: a bare RFC 6749 body
+ * (`error`, `error_description`), core's `{status_code, message, data}` or the Developer Hub's
+ * `{error, status_code, data: <core body>}` wrapper. The code is appended when it adds information.
+ */
+export function oauthErrorDetail(json: any, fallback: string): string {
+  const inner = json?.data?.data && typeof json.data.data === "object" ? json.data.data : json?.data && typeof json.data === "object" ? json.data : undefined;
+  const detail: string | undefined =
+    inner?.error_description || inner?.message || json?.error_description || json?.message || undefined;
+  const code: string | undefined = inner?.error || json?.error || undefined;
+  if (detail && code && code !== detail && !String(detail).includes(code)) return `${detail} (${code})`;
+  return detail || code || fallback;
+}
+
 export async function requestDeviceAuthorization(p: {
   baseUrl: string;
   clientId: string;
@@ -209,8 +223,7 @@ export async function requestDeviceAuthorization(p: {
   const { status, json } = await rawTokenPost(p.baseUrl, "/oauth/device_authorization", body, p.clientId);
   const d = json?.device_code ? json : json?.data?.device_code ? json.data : null;
   if (status >= 400 || json?.error || !d) {
-    const msg = json?.error_description || json?.message || json?.error || `device authorization failed (HTTP ${status})`;
-    throw new CliError(`Device authorization request failed: ${msg}`, ExitCode.AUTH, json);
+    throw new CliError(`Device authorization request failed: ${oauthErrorDetail(json, `device authorization failed (HTTP ${status})`)}`, ExitCode.AUTH, json);
   }
   const verification_uri: string = d.verification_uri || d.verification_url;
   if (!d.device_code || !d.user_code || !verification_uri) {
