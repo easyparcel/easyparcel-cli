@@ -54,16 +54,16 @@ Three layers (choose your granularity):
   Raw API     ep api POST shipment/quotations --data '{...}'
 
 For AI agents:
-  ep describe                 List every operation + JSON schema (machine-readable)
+  ep describe                 List every operation + JSON schema + prerequisites (machine-readable)
   ep mcp                      Run an MCP server exposing all operations as tools
 
 Authentication:
-  ep auth login               Browser OAuth2 + PKCE  (or set EASYPARCEL_ACCESS_TOKEN for headless use)
-  ep auth status              Show current auth state
+  ep login                    Browser sign-in (result on localhost:8788); ep login --device for a code on any device
+  ep auth status              Show who is signed in, the token expiry and where it is stored
   ep account list             Accounts this login can act on; pick one with --account <id> or \`ep account use <id>\`
 
 Output: --format json|pretty|table|ndjson|csv   ·   --data-only   ·   --dry-run (mutating cmds)
-Exit codes: 0 ok · 2 usage · 3 auth · 4 not-found · 5 validation · 6 rate-limited · 7 item-errors · 8 network
+Exit codes: 0 ok · 2 usage · 3 not signed in · 4 not found · 5 bad input · 6 rate-limited · 7 item errors · 8 network · 9 forbidden
 `,
   );
 

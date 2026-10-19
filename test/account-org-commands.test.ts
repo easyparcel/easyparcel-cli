@@ -51,11 +51,12 @@ afterEach(() => {
 
 describe("human tables", () => {
   it("renders accounts with the contract columns and tolerates missing fields", () => {
-    const out = renderTable(accountRows(ACCOUNTS), getOperation("account.list")!.humanTable!.columns, makeColor(false));
+    const rows = accountRows(ACCOUNTS, { defaultAccountId: "202" });
+    const out = renderTable(rows, getOperation("account.list")!.humanTable!.columns, makeColor(false));
     const lines = out.split("\n");
-    expect(lines[0].split("|").map((s) => s.trim())).toEqual(["ACCOUNT_ID", "NAME", "TYPE", "COUNTRY", "ORGANISATION", "TOKEN_USABLE"]);
-    expect(lines[2]).toMatch(/101\s+\|\s+Main shop\s+\|\s+business\s+\|\s+MY\s+\|\s+9\s+\|\s+yes/);
-    expect(lines[3]).toMatch(/202 .*SG branch.*\|\s+no\s*$/);
+    expect(lines[0].split("|").map((s) => s.trim())).toEqual(["ACCOUNT_ID", "NAME", "TYPE", "COUNTRY", "CURRENCY", "DEFAULT"]);
+    expect(lines[2]).toMatch(/101\s+\|\s+Main shop\s+\|\s+business\s+\|\s+MY\s+\|\s+MYR\s+\|\s*$/);
+    expect(lines[3]).toMatch(/202 .*SG branch.*\|\s+SGD\s+\|\s+\*\s*$/);
     expect(lines[4]).toMatch(/^ 303 /);
   });
 
@@ -76,7 +77,7 @@ describe("human tables", () => {
     } finally {
       spy.mockRestore();
     }
-    expect(out.join("")).toContain("TOKEN_USABLE");
+    expect(out.join("")).toContain("CURRENCY");
     expect(out.join("")).not.toContain("status_code");
     expect(api.mock.calls[0][1]).toMatchObject({ path: "account/list_accounts", target: false });
   });
@@ -148,8 +149,8 @@ describe("deprecation notice", () => {
       spy.mockRestore();
     }
     const text = err.join("");
-    expect(text.match(/Deprecated: sign in once and pass --account <id>/g)).toHaveLength(1);
-    expect(text).toContain("--all / auth sync will be removed in a future release.");
+    expect(text.match(/`--all` and `ep auth sync` are deprecated/g)).toHaveLength(1);
+    expect(text).toContain("pass --account <id>");
   });
 });
 

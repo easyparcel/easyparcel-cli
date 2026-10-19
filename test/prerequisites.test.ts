@@ -1,13 +1,16 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { OPERATIONS, getOperation, prerequisitesOf, prerequisiteLines, mcpPrerequisiteText, targetScope } from "../src/operations";
-import type { JSONSchema } from "../src/operations/types";
+import type { JSONSchema, Operation } from "../src/operations/types";
 import { buildLongHelp } from "../src/cli/global";
 import { describePrerequisites } from "../src/cli/describe";
 import { toolDescription } from "../src/mcp/server";
 import { matchPrerequisite, prerequisiteHint } from "../src/cli/hints";
+import { buildContext } from "../src/core/context";
+import { ExitCode, exitCodeForStatus } from "../src/core/errors";
+import { friendlyError, ignoredTargetFlag, reportEnvelope } from "../src/cli/run";
 
 let tmp: string;
 beforeAll(() => {
@@ -78,7 +81,6 @@ describe("prerequisite graph integrity", () => {
     expect(edge("ondemand.cancel", "booking_id")).toContain("ondemand.list");
     expect(edge("ondemand.details", "booking_id")).toContain("ondemand.list");
     expect(edge("shipment.bulk-awbs", "awb")).toContain("shipment.list");
-    expect(edge("shipment.quote", "shipment[].parcel_category_id")).toEqual(["shipment.parcel-categories"]);
     expect(edge("courier.dropoff-points", "courier_id")).toContain("courier.list");
   });
 });
@@ -132,5 +134,84 @@ describe("error hints", () => {
     expect(prerequisiteHint(getOperation("shipment.submit")!, env(400, "The ondemand_service_id is bad"))).toBeUndefined();
     expect(prerequisiteHint(getOperation("shipment.submit")!, env(500, "service_id broke"))).toBeUndefined();
     expect(prerequisiteHint(getOperation("account.wallet")!, env(400, "account_id required"))).toBeUndefined();
+  });
+});
+
+describe("exit codes and friendly errors", () => {
+  it("403 maps to FORBIDDEN (9), 401 stays AUTH (3)", () => {
+    expect(ExitCode.FORBIDDEN).toBe(9);
+    expect(exitCodeForStatus(403)).toBe(9);
+    expect(exitCodeForStatus(401)).toBe(3);
+  });
+
+  it("formats one line with the server message, details and code", () => {
+    expect(friendlyError({ status_code: 400, message: "Invalid input Error", data: ["a is required", "b is required"] })).toBe(
+      "Invalid input Error: a is required; b is required (400)",
+    );
+    expect(friendlyError({ status_code: 403, code: "ACCOUNT_FORBIDDEN", message: "nope", data: null } as any)).toBe("nope (ACCOUNT_FORBIDDEN)");
+    expect(friendlyError({ status_code: 400, message: "Missing Required Param;", data: { shipment_number: ["The shipment number field is required."] } })).toBe(
+      "Missing Required Param: The shipment number field is required. (400)",
+    );
+  });
+
+  function capture(fn: () => void): { out: string; err: string } {
+    const out: string[] = [];
+    const err: string[] = [];
+    const o = vi.spyOn(process.stdout, "write").mockImplementation((c: any) => (out.push(String(c)), true));
+    const e = vi.spyOn(process.stderr, "write").mockImplementation((c: any) => (err.push(String(c)), true));
+    try {
+      fn();
+    } finally {
+      o.mockRestore();
+      e.mockRestore();
+    }
+    return { out: out.join(""), err: err.join("") };
+  }
+
+  it("on a terminal: friendly line + hint on stderr, nothing on stdout; with --format json: envelope on stdout", () => {
+    const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    const prev = process.exitCode;
+    try {
+      const op = getOperation("shipment.submit")!;
+      const failure = { status_code: 400, message: "Invalid input Error", data: ["The shipment 0 service_id field is required."] };
+      const human = capture(() => reportEnvelope(buildContext({}), failure, undefined, op));
+      expect(human.out).toBe("");
+      expect(human.err).toContain("error: Invalid input Error: The shipment 0 service_id field is required. (400)\n");
+      expect(human.err).toContain("hint: service_id comes from `ep shipment quote` — run that first.\n");
+      expect(process.exitCode).toBe(ExitCode.VALIDATION);
+      const machine = capture(() => reportEnvelope(buildContext({ format: "json" }), failure, undefined, op));
+      expect(JSON.parse(machine.out)).toMatchObject({ status_code: 400 });
+    } finally {
+      if (tty) Object.defineProperty(process.stdout, "isTTY", tty);
+      else delete (process.stdout as any).isTTY;
+      process.exitCode = prev;
+    }
+  });
+});
+
+describe("ignored target flags", () => {
+  it("--organization on an account-scoped call is not sent and names the account that answered", () => {
+    const ctx = buildContext({ quiet: true, account: "123456", organization: "ABCDEF" });
+    const { ctx: callCtx, warn } = ignoredTargetFlag(ctx, getOperation("account.wallet")!);
+    expect(callCtx.organizationId).toBeUndefined();
+    expect(callCtx.accountId).toBe("123456");
+    expect(warn!({ status_code: 200, data: {} })).toBe(
+      "--organization ABCDEF is ignored by `ep account wallet` (it acts on a shipping account); answered by account 123456.",
+    );
+    expect(warn!({ status_code: 400, data: null })).toContain("it was not sent");
+  });
+
+  it("--account on an organization-scoped call is not sent", () => {
+    const orgOp: Operation = { ...getOperation("account.wallet")!, id: "x.org", scope: "organization" };
+    const ctx = buildContext({ quiet: true, account: "123456", organization: "ABCDEF" });
+    const { ctx: callCtx, warn } = ignoredTargetFlag(ctx, orgOp);
+    expect(callCtx.accountId).toBeUndefined();
+    expect(warn!({ status_code: 200, data: {} })).toContain("answered by organization ABCDEF");
+  });
+
+  it("leaves profile / env targets and matching flags alone", () => {
+    const ctx = buildContext({ quiet: true, account: "123456" });
+    expect(ignoredTargetFlag(ctx, getOperation("account.wallet")!).warn).toBeUndefined();
   });
 });

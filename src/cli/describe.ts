@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { OPERATIONS, getOperation, mcpToolName, GROUP_SUMMARY, prerequisitesOf, cliCommand, targetScope } from "../operations";
 import type { Operation } from "../operations/types";
+import { ExitCode as Codes } from "../core/errors";
 import { getContext } from "../core/context";
 import { addGlobalOptions } from "./global";
 import { printJson } from "../core/output";
@@ -19,6 +20,20 @@ export function describePrerequisites(op: Operation): Array<Record<string, unkno
   }));
 }
 
+/** The documented exit codes, for scripts and agents. */
+export const EXIT_CODES: Record<string, string> = {
+  [Codes.OK]: "ok",
+  [Codes.GENERIC]: "unexpected error",
+  [Codes.USAGE]: "usage error (bad flag, missing --data, target needed)",
+  [Codes.AUTH]: "not signed in / token rejected (401)",
+  [Codes.NOT_FOUND]: "not found (404)",
+  [Codes.VALIDATION]: "bad input (400)",
+  [Codes.RATE_LIMITED]: "rate limited (429)",
+  [Codes.ITEM_ERRORS]: "batch item errors (--fail-on-item-error)",
+  [Codes.NETWORK]: "network error / timeout",
+  [Codes.FORBIDDEN]: "signed in but not allowed (403: scope, owner-only or another account)",
+};
+
 /**
  * Machine-readable catalog so AI agents can introspect every operation,
  * its endpoint, whether it mutates, and its request-body JSON Schema.
@@ -36,6 +51,7 @@ export function registerDescribe(program: Command): void {
           api_version: ctx.apiVersion,
           base_url: ctx.baseUrl,
           groups: GROUP_SUMMARY,
+          exit_codes: EXIT_CODES,
           operations: OPERATIONS.map((o) => ({
             id: o.id,
             group: o.group,

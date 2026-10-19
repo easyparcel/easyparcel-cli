@@ -7,6 +7,10 @@ import type { ProfileCredentials, TokenResponse } from "./types";
 
 const SKEW_MS = 30_000;
 
+/** What to run when there is no usable session (names both sign-in flows). */
+export const SIGNED_OUT_MESSAGE =
+  "Not signed in. Run `ep login` (browser) or `ep login --device` (a code you approve on any device), or set EASYPARCEL_ACCESS_TOKEN.";
+
 /** True when the access token is known to be expired (or about to). */
 export function isExpired(expiresAt?: string): boolean {
   if (!expiresAt) return false; // unknown expiry → assume valid; a 401 will trigger refresh
@@ -44,7 +48,7 @@ export function maybePersist(ctx: RuntimeContext, creds: ProfileCredentials): vo
 export async function getValidAccessToken(ctx: RuntimeContext): Promise<string> {
   const creds = getProfileCredentials(ctx.profile);
   if (!creds.access_token && !creds.refresh_token) {
-    throw new CliError("Not authenticated. Run `ep auth login`, or set EASYPARCEL_ACCESS_TOKEN.", ExitCode.AUTH);
+    throw new CliError(SIGNED_OUT_MESSAGE, ExitCode.AUTH);
   }
   if (creds.access_token && !isExpired(creds.expires_at)) return creds.access_token;
   if (creds.refresh_token) {
@@ -52,7 +56,7 @@ export async function getValidAccessToken(ctx: RuntimeContext): Promise<string> 
     if (tok) return tok;
   }
   if (creds.access_token) return creds.access_token; // last resort; may be valid
-  throw new CliError("No usable access token. Run `ep auth login`.", ExitCode.AUTH);
+  throw new CliError(`The session has no usable access token. ${SIGNED_OUT_MESSAGE.replace(/^Not signed in\. /, "")}`, ExitCode.AUTH);
 }
 
 /** Attempt a refresh; returns the new access token or undefined on failure. */

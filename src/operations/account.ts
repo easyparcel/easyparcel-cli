@@ -1,16 +1,34 @@
-import { type Operation, yesNo } from "./types";
+import type { HumanTableContext, Operation } from "./types";
+
+/** Wallet currency per base country (the API derives it the same way); blank when unknown. */
+const COUNTRY_CURRENCY: Record<string, string> = { MY: "MYR", SG: "SGD" };
 
 /** Rows for `ep account list` on a terminal (fields per the list_accounts contract; missing ones stay blank). */
-export function accountRows(data: unknown): Record<string, unknown>[] {
+export function accountRows(data: unknown, ctx: HumanTableContext = {}): Record<string, unknown>[] {
   const list = Array.isArray(data) ? data : [];
-  return list.map((a: any) => ({
-    ACCOUNT_ID: a?.account_id ?? "",
-    NAME: a?.name ?? "",
-    TYPE: a?.account_type ?? "",
-    COUNTRY: a?.base_country ?? "",
-    ORGANISATION: a?.organization_id ?? "",
-    TOKEN_USABLE: yesNo(a?.token_usable),
-  }));
+  return list.map((a: any) => {
+    const country = a?.base_country ?? "";
+    return {
+      ACCOUNT_ID: a?.account_id ?? "",
+      NAME: a?.name ?? "",
+      TYPE: a?.account_type ?? "",
+      COUNTRY: country,
+      CURRENCY: a?.currency ?? COUNTRY_CURRENCY[String(country).toUpperCase()] ?? "",
+      DEFAULT: ctx.defaultAccountId !== undefined && String(a?.account_id) === String(ctx.defaultAccountId) ? "*" : "",
+    };
+  });
+}
+
+/** Rows for `ep wallet --format table`: one row per balance (credit wallet, then free credit). */
+export function walletRows(data: unknown): Record<string, unknown>[] {
+  const d = data && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : {};
+  const rows: Record<string, unknown>[] = [];
+  const add = (kind: string, list: unknown) => {
+    for (const w of Array.isArray(list) ? list : []) rows.push({ WALLET: kind, BALANCE: (w as any)?.balance ?? "", CURRENCY: (w as any)?.currency ?? "" });
+  };
+  add("credit", d.wallet);
+  add("free credit", d.free_credit_wallet);
+  return rows;
 }
 
 export const accountOperations: Operation[] = [
@@ -33,6 +51,7 @@ export const accountOperations: Operation[] = [
     method: "GET",
     path: "wallet",
     body: "none",
+    humanTable: { columns: ["WALLET", "BALANCE", "CURRENCY"], rows: walletRows },
   },
   {
     id: "account.list",
@@ -49,7 +68,7 @@ export const accountOperations: Operation[] = [
     examples: ["ep account list", "ep account use 123456", "ep wallet --account 123456"],
     provides: ["[].account_id"],
     humanTable: {
-      columns: ["ACCOUNT_ID", "NAME", "TYPE", "COUNTRY", "ORGANISATION", "TOKEN_USABLE"],
+      columns: ["ACCOUNT_ID", "NAME", "TYPE", "COUNTRY", "CURRENCY", "DEFAULT"],
       rows: accountRows,
     },
   },

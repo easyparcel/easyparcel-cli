@@ -32,9 +32,11 @@ import {
   hasEnvAccessToken,
 } from "../core/credentials";
 import { keychainAvailable } from "../core/keychain";
-import { tokensFromResponse, doRefresh, isExpired } from "../core/tokens";
+import { tokensFromResponse, doRefresh, isExpired, SIGNED_OUT_MESSAGE } from "../core/tokens";
 import { apiRequest } from "../core/client";
-import { isIdentityToken } from "../core/jwt";
+import { decodeJwtPayload, isIdentityToken, isJwtExpired } from "../core/jwt";
+import { DEFAULT_PROFILE } from "../core/config";
+import type { ProfileCredentials } from "../core/types";
 import type { RuntimeContext } from "../core/context";
 import type { TokenResponse } from "../core/types";
 
@@ -111,7 +113,9 @@ export function planAccountSync(
 }
 
 const DEPRECATION_NOTICE =
-  "Deprecated: sign in once and pass --account <id> (or `ep account use <id>`); --all / auth sync will be removed in a future release.";
+  "`--all` and `ep auth sync` are deprecated and will be removed in a future release. Instead sign in once with `ep login` " +
+  "(choose \"All my shipping accounts\" on the approval page), list them with `ep account list`, then pass --account <id> " +
+  "or store a default with `ep account use <id>`.";
 let deprecationShown = false;
 
 /** Print the `--all` / `auth sync` deprecation once per process (stderr). */
@@ -131,6 +135,51 @@ export function loginTargetFields(accessToken?: string): { identity?: true; acco
   return isIdentityToken(accessToken)
     ? { identity: true, account_id: undefined }
     : { identity: undefined, account_id: accountIdFromToken(accessToken) };
+}
+
+/** `--profile <name>` for messages, empty for the default profile. */
+function profileFlag(profile: string): string {
+  return profile === DEFAULT_PROFILE ? "" : ` --profile ${profile}`;
+}
+
+/**
+ * Who a stored session belongs to, from what is on this machine only (JWT claims, then the
+ * stored index): a name or email when the token carries one, else the account label or a numeric
+ * user id. Undefined when nothing readable is stored (opaque ids are never shown).
+ */
+export function signedInAs(creds: ProfileCredentials): string | undefined {
+  if (creds.access_token?.startsWith("epat_")) return "a personal access token";
+  const p = decodeJwtPayload(creds.access_token);
+  const user = p?.user ?? {};
+  const named = [user.name, user.email, p?.name, p?.email].find((v) => typeof v === "string" && v.trim());
+  if (named) return String(named).trim();
+  if (creds.account_label) return creds.account_label;
+  if (/^\d+$/.test(String(user.id ?? ""))) return `user ${user.id}`;
+  return undefined;
+}
+
+/** "Signed in as X" / "Signed in" when no readable name is stored. */
+function signedInPhrase(creds: ProfileCredentials, prefix = "Signed in"): string {
+  const who = signedInAs(creds);
+  return who ? `${prefix} as ${who}` : prefix;
+}
+
+/** True when a stored session's access token is still usable without a refresh. */
+function accessTokenFresh(creds: ProfileCredentials): boolean {
+  return Boolean(creds.access_token) && !isExpired(creds.expires_at) && !isJwtExpired(creds.access_token);
+}
+
+/**
+ * The profile's stored session when it is still good: a fresh access token, or a refresh token
+ * the server accepts. Environment tokens are not a stored session.
+ */
+async function existingSession(ctx: RuntimeContext): Promise<ProfileCredentials | undefined> {
+  if (hasEnvAccessToken() || process.env.EASYPARCEL_REFRESH_TOKEN) return undefined;
+  if (!loadStore().profiles[ctx.profile]) return undefined;
+  const creds = getProfileCredentials(ctx.profile);
+  if (accessTokenFresh(creds)) return creds;
+  if (creds.refresh_token && (await doRefresh(ctx, creds))) return getProfileCredentials(ctx.profile);
+  return undefined;
 }
 
 function persistLogin(ctx: RuntimeContext, tr: TokenResponse, client: ClientCreds, grant: string): void {
@@ -434,12 +483,34 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
   const jsonMode = Boolean(opts.json);
   const nonInteractive = Boolean(opts.nonInteractive);
 
+  // Before anything else (no network, no browser), so the notice is the first thing shown.
   if (opts.all) warnDeprecatedMultiProfile();
 
   // --- --with-token: read an epat_ token from stdin (never persisted) ---
   if (opts.withToken) {
     await withTokenLogin(ctx, opts);
     return;
+  }
+
+  // Already signed in: say so instead of opening a browser and waiting. --force signs in again.
+  if (!opts.force && !opts.clientCredentials) {
+    const session = await existingSession(ctx);
+    if (session) {
+      const flag = profileFlag(ctx.profile);
+      log.info(
+        `${signedInPhrase(session, "Already signed in")} (profile ${ctx.profile}). Use \`ep login --force${flag}\` to sign in again, or \`ep logout${flag}\`.`,
+      );
+      if (jsonMode || !process.stdout.isTTY) {
+        printJson({
+          status: "already_signed_in",
+          profile: ctx.profile,
+          signed_in_as: signedInAs(session) ?? null,
+          target_mode: session.identity || isIdentityToken(session.access_token) ? "identity" : "account",
+          expires_at: session.expires_at ?? null,
+        });
+      }
+      return;
+    }
   }
 
   const client = resolveClient(ctx, opts);
@@ -564,12 +635,52 @@ function tokenSource(profile: string): "env" | "store" | "none" {
   return loadStore().profiles[profile] ? "store" : "none";
 }
 
+/** "token expires in 42 min" / "token expired …" from the stored expiry or the JWT `exp`. */
+function expiryText(creds: ProfileCredentials, nowMs = Date.now()): string {
+  const exp = decodeJwtPayload(creds.access_token)?.exp;
+  const at = creds.expires_at ? Date.parse(creds.expires_at) : typeof exp === "number" ? exp * 1000 : NaN;
+  if (!creds.access_token) return creds.refresh_token ? "access token renews on the next call" : "no access token";
+  if (!Number.isFinite(at)) return "token expiry unknown";
+  const mins = Math.round((at - nowMs) / 60000);
+  if (mins <= 0) return creds.refresh_token ? "token expired (renews on the next call)" : "token expired";
+  return mins >= 120 ? `token expires in ${Math.round(mins / 60)} h` : `token expires in ${mins} min`;
+}
+
+/** The human `ep auth status` line(s) for a terminal. Exported for tests. */
+export function statusLine(
+  profile: string,
+  creds: ProfileCredentials,
+  info: { storage: string; source: "env" | "store" | "none"; nowMs?: number },
+): string {
+  if (!creds.access_token && !creds.refresh_token) return `Not signed in (profile ${profile}). ${SIGNED_OUT_MESSAGE.replace(/^Not signed in\. /, "")}`;
+  const identity = Boolean(creds.identity) || isIdentityToken(creds.access_token) || Boolean(creds.access_token?.startsWith("epat_"));
+  const account = creds.account_id ?? accountIdFromToken(creds.access_token);
+  const reach = identity ? "all accounts" : account !== undefined ? `account ${account}` : "one account";
+  const parts = [
+    `${signedInPhrase(creds)} — ${reach}`,
+    `profile ${profile}`,
+    expiryText(creds, info.nowMs),
+    info.source === "env" ? "token from the environment" : `storage ${info.storage}`,
+  ];
+  if (creds.default_account_id !== undefined && creds.default_account_id !== null) parts.push(`default account ${creds.default_account_id}`);
+  if (creds.default_organization_id) parts.push(`default organization ${creds.default_organization_id}`);
+  return parts.join("; ");
+}
+
 function statusAction(): void {
   const ctx = getContext();
   const creds = getProfileCredentials(ctx.profile);
   const authenticated = Boolean(creds.access_token || creds.refresh_token);
   const identity =
     Boolean(creds.identity) || isIdentityToken(creds.access_token) || Boolean(creds.access_token?.startsWith("epat_"));
+  const storage = loadStore().profiles[ctx.profile]?.storage ?? (keychainAvailable() ? "keychain" : "file");
+  if (process.stdout.isTTY && !ctx.formatExplicit) {
+    process.stdout.write(statusLine(ctx.profile, creds, { storage, source: tokenSource(ctx.profile) }) + "\n");
+    const others = listProfiles().filter((p) => p !== ctx.profile);
+    if (others.length) process.stdout.write(`Other profiles: ${others.join(", ")}  (details: ep auth status --format json)\n`);
+    if (!authenticated) process.exitCode = ExitCode.AUTH;
+    return;
+  }
   printJson({
     profile: ctx.profile,
     base_url: ctx.baseUrl,
@@ -585,7 +696,7 @@ function statusAction(): void {
     expires_at: creds.expires_at ?? null,
     access_token_expired: creds.access_token ? isExpired(creds.expires_at) : null,
     // Where THIS profile's tokens live, not what the machine could do.
-    storage: loadStore().profiles[ctx.profile]?.storage ?? (keychainAvailable() ? "keychain" : "file"),
+    storage,
     profiles: listProfiles(),
   });
   if (!authenticated) process.exitCode = ExitCode.AUTH;
@@ -595,10 +706,10 @@ async function refreshAction(): Promise<void> {
   const ctx = getContext();
   const creds = getProfileCredentials(ctx.profile);
   if (!creds.refresh_token) {
-    throw new CliError("No refresh token for this profile. Run `ep auth login`.", ExitCode.AUTH);
+    throw new CliError(`No refresh token for this profile. ${SIGNED_OUT_MESSAGE.replace(/^Not signed in\. /, "")}`, ExitCode.AUTH);
   }
   const token = await doRefresh(ctx, creds);
-  if (!token) throw new CliError("Token refresh failed. Run `ep auth login` again.", ExitCode.AUTH);
+  if (!token) throw new CliError(`Token refresh failed. ${SIGNED_OUT_MESSAGE.replace(/^Not signed in\. /, "")}`, ExitCode.AUTH);
   const updated = getProfileCredentials(ctx.profile);
   printJson({ status: "ok", profile: ctx.profile, expires_at: updated.expires_at ?? null });
 }
@@ -665,7 +776,7 @@ async function syncAccountsAction(opts: Record<string, any>): Promise<void> {
   warnDeprecatedMultiProfile();
   const creds = getProfileCredentials(ctx.profile);
   if (!creds.access_token && !creds.refresh_token) {
-    throw new CliError(`Profile '${ctx.profile}' is not signed in. Run \`ep login\` first.`, ExitCode.AUTH);
+    throw new CliError(`Profile '${ctx.profile}' is not signed in. Run \`ep login\` or \`ep login --device\` first.`, ExitCode.AUTH);
   }
   if (creds.identity || isIdentityToken(creds.access_token)) {
     log.info(`Profile '${ctx.profile}' already covers all your accounts; nothing to sync. Run \`ep account list\`, then pass --account <id>.`);
@@ -719,29 +830,44 @@ function attachLoginOptions(cmd: Command): Command {
   return cmd
     .option("--client-id <id>", "Override the built-in OAuth client id")
     .option("--client-secret <secret>", "OAuth client secret (only for confidential/custom apps)")
-    .option("--device", "Use the device authorization grant (RFC 8628); auto-selected when headless/SSH. Opens the approval page in your browser on a desktop (add --no-browser to only print the code)")
+    .option("--device", "Sign in with a code you approve on any device (auto over SSH / headless). On a desktop it also opens the approval page; --no-browser prints the code only")
     .option("--no-device", "Force the browser flow even when headless")
-    .option("--with-token", "Read a personal access token (epat_) from stdin; never written to disk")
+    .option("--with-token", "Check a personal access token (epat_) read from stdin; never written to disk")
     .option("--no-verify", "Skip the server verification call for --with-token")
     .option("--client-credentials", "Use the client_credentials grant (no browser)")
-    .option("--all", "Authorize ALL accounts you belong to and save one profile per account")
+    .option("--all", "Deprecated: one profile per account. Sign in once instead and pass --account <id> (see `ep account list`)")
+    .option("--force", "Sign in again even when this profile already has a valid session")
     .option("--no-browser", "Never open a browser: browser flow → paste the redirect code back; --device → print the code only")
     .option("--redirect-uri <uri>", "Override the redirect URI (must be registered)")
     .option("--port <port>", `Loopback callback port (default ${DEFAULT_CALLBACK_PORT}, the only port registered for the built-in app; others need --redirect-uri)`)
     .option("--scope <scope>", "OAuth scope (usually empty for this API)")
     .option("--json", "Emit machine-readable JSON status (for agents/CI)")
-    .option("--non-interactive", "Never prompt; fail instead of waiting for interactive input")
+    .option("--non-interactive", "Never prompt or wait for a person; fail instead (use with --with-token or --client-credentials)")
     .option("--wait <seconds>", "Seconds to wait for browser authorization", "300");
 }
 
 const LOGIN_DESCRIPTION =
-  `Sign in to EasyParcel. Default: browser OAuth2 + PKCE on loopback port ${DEFAULT_CALLBACK_PORT}. ` +
-  "Use --device for a no-browser device code (auto over SSH), or --with-token for a piped epat_ token.";
+  `Sign in to EasyParcel. By default your browser opens the EasyParcel sign-in page and the CLI receives the result ` +
+  `on http://localhost:${DEFAULT_CALLBACK_PORT}/callback (OAuth2 + PKCE). --device: a short code you approve on any ` +
+  "device (opens the approval page on a desktop; --no-browser prints the code only; auto-selected over SSH). " +
+  "--with-token: check a personal access token piped on stdin (never stored). --non-interactive: fail instead of " +
+  "waiting for a person. --force: sign in again when already signed in. --all: deprecated.";
+
+const LOGIN_HELP = `
+Flows:
+  ep login                       Browser sign-in; the result comes back on localhost:${DEFAULT_CALLBACK_PORT}
+  ep login --device              Code you approve on any device (opens the page on a desktop)
+  ep login --device --no-browser Print the code only (SSH, servers, containers)
+  printf %s "$TOKEN" | ep login --with-token   Check a personal access token (not stored)
+  ep login --force               Sign in again although this profile is signed in
+
+After signing in: ep account list, then --account <id> or ep account use <id>.
+--all (one profile per account) is deprecated; use --account instead.`;
 
 export function registerAuth(program: Command): void {
   const auth = program.command("auth").description("Authenticate and manage credentials / profiles");
 
-  addGlobalOptions(attachLoginOptions(auth.command("login").description(LOGIN_DESCRIPTION))).action(loginAction);
+  addGlobalOptions(attachLoginOptions(auth.command("login").description(LOGIN_DESCRIPTION))).addHelpText("after", LOGIN_HELP).action(loginAction);
 
   addGlobalOptions(auth.command("status").description("Show authentication status for the active profile")).action(
     statusAction,
@@ -765,7 +891,7 @@ export function registerAuth(program: Command): void {
   addGlobalOptions(auth.command("whoami").description("Fetch the connected account profile")).action(whoamiAction);
 
   // Top-level aliases (match the spec's `ep login` / `ep logout`).
-  addGlobalOptions(attachLoginOptions(program.command("login").description(LOGIN_DESCRIPTION))).action(loginAction);
+  addGlobalOptions(attachLoginOptions(program.command("login").description(LOGIN_DESCRIPTION))).addHelpText("after", LOGIN_HELP).action(loginAction);
   addGlobalOptions(
     program
       .command("logout")

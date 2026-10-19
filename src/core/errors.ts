@@ -12,6 +12,7 @@ export const ExitCode = {
   RATE_LIMITED: 6, // 429
   ITEM_ERRORS: 7, // batch returned 200 but some items failed (with --fail-on-item-error)
   NETWORK: 8, // connection / timeout
+  FORBIDDEN: 9, // 403: signed in but not allowed (scope, owner-only account, another account)
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -36,8 +37,9 @@ export function exitCodeForStatus(status: number): number {
     case 400:
       return ExitCode.VALIDATION;
     case 401:
-    case 403:
       return ExitCode.AUTH;
+    case 403:
+      return ExitCode.FORBIDDEN;
     case 404:
       return ExitCode.NOT_FOUND;
     case 429:

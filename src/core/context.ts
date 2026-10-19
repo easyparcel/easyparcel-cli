@@ -46,6 +46,9 @@ export interface RuntimeContext {
   accountId?: string;
   /** Organization id or 6-letter ref to act on (X-Organization-Id); flag > env > profile default. */
   organizationId?: string;
+  /** True when the target came from the --account / --organization flag (not env or profile). */
+  accountFromFlag?: boolean;
+  organizationFromFlag?: boolean;
 }
 
 let current: RuntimeContext | null = null;
@@ -118,6 +121,8 @@ export function buildContext(opts: GlobalOptions): RuntimeContext {
     },
     accountId: target.accountId,
     organizationId: target.organizationId,
+    accountFromFlag: opts.account !== undefined && String(opts.account).trim() !== "",
+    organizationFromFlag: opts.organization !== undefined && String(opts.organization).trim() !== "",
   };
   setContext(ctx);
   return ctx;
