@@ -77,6 +77,8 @@ describe("prerequisite graph integrity", () => {
     expect(edge("ondemand.order", "metadata.quotationId")).toEqual(["ondemand.quote"]);
     expect(edge("ondemand.cancel", "booking_id")).toContain("ondemand.list");
     expect(edge("ondemand.details", "booking_id")).toContain("ondemand.list");
+    expect(edge("shipment.bulk-awbs", "awb")).toContain("shipment.list");
+    expect(edge("shipment.quote", "shipment[].parcel_category_id")).toEqual(["shipment.parcel-categories"]);
     expect(edge("courier.dropoff-points", "courier_id")).toContain("courier.list");
   });
 });
@@ -116,6 +118,7 @@ describe("error hints", () => {
     expect(prerequisiteHint(submit, e)).toBe("hint: service_id comes from `ep shipment quote` — run that first.");
     expect(prerequisiteHint(submit, e, "mcp")).toContain("ep_shipment_quote");
     expect(prerequisiteHint(getOperation("shipment.details")!, env(404, "No Order with shipment_number ES-1 found"))).toContain("ep shipment list");
+    expect(prerequisiteHint(getOperation("shipment.bulk-awbs")!, env(400, "Awb not found"))).toContain("ep shipment list");
     // the validator writes field names with spaces
     expect(prerequisiteHint(submit, env(400, "Invalid input Error", ["The shipment.0.service id field is required."]))).toContain("ep shipment quote");
     expect(prerequisiteHint(getOperation("shipment.details")!, env(400, "Missing Required Param;", { shipment_number: ["The shipment number field is required."] }))).toContain(

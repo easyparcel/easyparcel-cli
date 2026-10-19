@@ -22,7 +22,7 @@ export const OPERATIONS: Operation[] = [
 export const GROUPS: OperationGroup[] = ["shipment", "courier", "ondemand", "account", "organization", "einvoice", "address"];
 
 export const GROUP_SUMMARY: Record<OperationGroup, string> = {
-  shipment: "Standard shipping: quote, submit, track, cancel, insurance",
+  shipment: "Standard shipping: quote, submit, track, cancel, insurance, parcel categories, AWB PDFs",
   courier: "Courier discovery: list couriers, drop-off points",
   ondemand: "On-demand / same-day delivery (Lalamove, PandaGo, …)",
   account: "Account profile, wallet balances, and the accounts this login can act on",

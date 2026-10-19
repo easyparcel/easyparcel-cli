@@ -1,4 +1,10 @@
 import { type Operation, str, num, bool, arr, obj, addressSchema } from "./types";
+
+/** `ep shipment parcel-categories` rows: id → name (used as parcel_category_id for DDP). */
+function parcelCategoryRows(data: unknown): Record<string, unknown>[] {
+  const list = Array.isArray(data) ? data : [];
+  return list.map((c: any) => ({ ID: c?.id ?? "", NAME: c?.name ?? "" }));
+}
 import type { Envelope } from "../core/types";
 
 function paginationCursor(field: "next_shipment_number" | "next_booking_number") {
@@ -58,7 +64,7 @@ export const shipmentOperations: Operation[] = [
               height: num("cm"),
               length: num("cm"),
               parcel_value: num("Declared value (for insurance/DDP)"),
-              parcel_category_id: num("From `ep ... parcel-category list` (DDP)"),
+              parcel_category_id: num("From `ep shipment parcel-categories` (DDP)"),
             },
             ["sender", "receiver", "weight"],
           ),
@@ -76,6 +82,14 @@ export const shipmentOperations: Operation[] = [
         },
       ],
     },
+    prerequisites: [
+      {
+        param: "shipment[].parcel_category_id",
+        from: "shipment.parcel-categories",
+        field: "[].id",
+        when: "international DDP quotes",
+      },
+    ],
     provides: ["[].quotations[].courier.service_id", "[].quotations[].courier.courier_id"],
     examples: [
       `ep quote --data '{"shipment":[{"sender":{"postcode":"11950","country":"MY"},"receiver":{"postcode":"55100","country":"MY"},"weight":1}]}'`,
@@ -177,6 +191,7 @@ export const shipmentOperations: Operation[] = [
       { param: "coupon_codes", from: "shipment.coupon-list", field: "coupons[].coupon_code", when: "paying with a coupon" },
       { param: "shipment[].insurance[].insurance_service_id", from: "shipment.insurance-quote", field: "[].insurance_quotations[].insurance_service_id", when: "adding insurance" },
       { param: "shipment[].sender.point_code", from: "courier.dropoff-points", field: "[].point_id", when: "dropping the parcel off instead of a pickup" },
+      { param: "shipment[].feature.courier_ddp.parcel_category_id", from: "shipment.parcel-categories", field: "[].id", when: "international DDP" },
       {
         param: "shipment[].receiver",
         from: "address.search",
@@ -318,5 +333,46 @@ export const shipmentOperations: Operation[] = [
       { param: "list[].courier_id", from: "courier.list", field: "[].courier_id" },
     ],
     provides: ["[].insurance_quotations[].insurance_service_id"],
+  },
+
+  {
+    id: "shipment.parcel-categories",
+    group: "shipment",
+    command: "parcel-categories",
+    aliases: ["parcel-category-list"],
+    summary: "List parcel categories (ids for DDP quotes and orders)",
+    description:
+      "Returns { id, name } per parcel category. Use the id as shipment[].parcel_category_id when quoting and as feature.courier_ddp.parcel_category_id when submitting a DDP shipment.",
+    method: "GET",
+    path: "parcel_category/list",
+    body: "none",
+    provides: ["[].id"],
+    humanTable: { columns: ["ID", "NAME"], rows: parcelCategoryRows },
+  },
+
+  {
+    id: "shipment.bulk-awbs",
+    group: "shipment",
+    command: "bulk-awbs",
+    summary: "Generate one consignment-note PDF for several AWBs (returns the file URL)",
+    description:
+      "Merges the consignment notes of your own shipments into one PDF and returns its URL in `data`. AWBs of other accounts are skipped; none found → 400 \"Awb not found\".",
+    method: "GET",
+    path: "shipment/bulk_awbs",
+    body: "json",
+    bodyRequired: true,
+    docNote: "GET-with-body endpoint. The CLI sends the JSON body on a GET request.",
+    schema: obj(
+      {
+        awb: arr(str(), "AWB numbers (from `ep shipment list` / `ep shipment submit`)"),
+        awb_rename: { type: "object", additionalProperties: { type: "string" }, description: "Optional { <awb>: <file label> } map" },
+      },
+      ["awb"],
+    ),
+    example: { awb: ["EP1234567890", "EP0987654321"] },
+    prerequisites: [
+      { param: "awb", from: "shipment.list", field: "[].awb_number" },
+      { param: "awb", from: "shipment.submit", field: "[].shipments[].awb_number", when: "just booked" },
+    ],
   },
 ];
