@@ -2,7 +2,7 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { OPERATIONS } from "../operations";
+import { getMcpOperations } from "./operations";
 import { buildServer } from "./server";
 import { createOAuthProxy, DEFAULT_TRUSTED_REDIRECT_HOSTS, type OAuthProxy } from "./oauth";
 import { createOAuthStore, seedOAuthClients, type OAuthStore } from "./store";
@@ -138,6 +138,7 @@ export async function startHttpMcpServer(opts: HttpMcpOptions): Promise<HttpMcpS
   // carrying that same bearer gets an HTTP 401 so the client refreshes; a new bearer clears it.
   const invalidSessions = new Map<string, string | undefined>();
   const endpoint = opts.path.startsWith("/") ? opts.path : `/${opts.path}`;
+  const mcpOperations = getMcpOperations();
   const requireAuth = opts.requireAuth || opts.oauth;
 
   // Per-source attribution: the upstream EasyParcel client this proxy authenticates as.
@@ -230,7 +231,7 @@ export async function startHttpMcpServer(opts: HttpMcpOptions): Promise<HttpMcpS
 
     // Health endpoint stays JSON (used by k8s/ALB probes and uptime checks).
     if (req.method === "GET" && url.pathname === "/health") {
-      sendJson(res, 200, { name: "easyparcel-mcp", status: "ok", tools: OPERATIONS.length, endpoint });
+      sendJson(res, 200, { name: "easyparcel-mcp", status: "ok", tools: mcpOperations.length, endpoint });
       return;
     }
 
@@ -251,7 +252,7 @@ export async function startHttpMcpServer(opts: HttpMcpOptions): Promise<HttpMcpS
         );
         return;
       }
-      sendJson(res, 200, { name: "easyparcel-mcp", status: "ok", tools: OPERATIONS.length, endpoint });
+      sendJson(res, 200, { name: "easyparcel-mcp", status: "ok", tools: mcpOperations.length, endpoint });
       return;
     }
 
@@ -332,6 +333,7 @@ export async function startHttpMcpServer(opts: HttpMcpOptions): Promise<HttpMcpS
 
       // Bind this client's token to its own Server instance; local-creds sessions stay token-less.
       const mcp = buildServer(token ? () => holder.token : undefined, {
+        operations: mcpOperations,
         onUnauthorized: () => {
           if (transport.sessionId) invalidSessions.set(transport.sessionId, holder.token);
         },
@@ -353,7 +355,7 @@ export async function startHttpMcpServer(opts: HttpMcpOptions): Promise<HttpMcpS
 
   log.info(
     `EasyParcel MCP server (Streamable HTTP) on http://${fallbackHost}:${port}${endpoint} ` +
-      `(${OPERATIONS.length} tools, auth ${requireAuth ? "required" : "optional"}` +
+      `(${mcpOperations.length} tools, auth ${requireAuth ? "required" : "optional"}` +
       `${oauth ? ", OAuth proxy enabled" : ""}).`,
   );
   if (oauth) {

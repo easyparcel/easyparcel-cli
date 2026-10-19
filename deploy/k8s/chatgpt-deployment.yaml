@@ -40,6 +40,10 @@ spec:
             # Pre-register the existing ChatGPT connector's client (it registered against an older,
             # since-replaced pod) so it authorizes without remove + re-add. redirect_uri must match
             # exactly what ChatGPT sends to /authorize; update if the connector is recreated.
+            # Read-only tool surface for the ChatGPT connector (no booking/cancel). Operation ids or
+            # tool names, comma-separated; unknown names fail startup. Matches production since image 0.1.11.
+            - name: EP_MCP_ALLOWED_OPERATIONS
+              value: shipment.quote,shipment.list,shipment.details,shipment.track,shipment.insurance-quote,courier.list,courier.dropoff-points
             - name: EP_MCP_SEED_CLIENTS
               value: '[{"client_id":"r3em8jm0a8vlpreS4u918jdP5YlS0xCZ","redirect_uris":["https://chatgpt.com/connector/oauth/AWx1IV2OseXF"],"client_name":"ChatGPT (seeded)"}]'
           ports:

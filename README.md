@@ -204,6 +204,12 @@ with `WWW-Authenticate: … error="invalid_token"` so the client refreshes and r
 Tool arguments `account_id` / `organization_id` choose the target per call; the server's
 own defaults never apply to a client's token.
 
+**Narrow the tool surface** with `EP_MCP_ALLOWED_OPERATIONS`, a comma-separated list of
+operation ids or tool names (see `ep describe`). Unset means every operation. The hosted
+ChatGPT broker, for example, runs with the read-only set
+`shipment.quote,shipment.list,shipment.details,shipment.track,shipment.insurance-quote,courier.list,courier.dropoff-points`.
+An unknown name stops the server at startup instead of silently exposing everything.
+
 ---
 
 ## 4. For automation / servers (no browser)

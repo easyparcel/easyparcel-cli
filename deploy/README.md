@@ -55,6 +55,15 @@ curl -i -X POST https://mcp.easyparcel.com/mcp -H 'content-type: application/jso
 ChatGPT → Settings → Connectors → Developer mode → Add custom connector →
 `https://mcp.easyparcel.com/mcp`. For public listing, submit via OpenAI's Apps process.
 
+## Tool allow-list per deployment
+
+`EP_MCP_ALLOWED_OPERATIONS` (comma-separated operation ids or tool names) limits which tools a
+deployment lists and serves; unset exposes all of them. `easyparcel-mcp-chatgpt` runs with the
+read-only set `shipment.quote,shipment.list,shipment.details,shipment.track,shipment.insurance-quote,courier.list,courier.dropoff-points`
+(see `deploy/k8s/chatgpt-deployment.yaml`); the general and Claude brokers expose every tool.
+`/health` reports the resulting `tools` count. An unknown name fails startup, so a typo shows up as a
+crash-looping pod rather than a wide-open connector.
+
 ## OAuth state store (Redis) & scaling
 
 The OAuth proxy's state — registered clients, pending authorizations and one-time codes — is

@@ -1,7 +1,8 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { OPERATIONS, mcpToolName, mcpPrerequisiteText } from "../operations";
+import { mcpToolName, mcpPrerequisiteText } from "../operations";
+import { getMcpOperations } from "./operations";
 import type { Operation } from "../operations/types";
 import { executeOperation } from "../cli/run";
 import { prerequisiteHint } from "../cli/hints";
@@ -75,6 +76,8 @@ export interface BuildServerOptions {
   onUnauthorized?: () => void;
   /** Test seam: replaces executeOperation. */
   execute?: typeof executeOperation;
+  /** Operations to expose as tools. Defaults to every operation, narrowed by EP_MCP_ALLOWED_OPERATIONS. */
+  operations?: Operation[];
 }
 
 export function toolDescription(op: Operation): string {
@@ -101,13 +104,14 @@ export function buildServer(authToken?: string | (() => string | undefined), opt
   const currentToken = typeof authToken === "function" ? authToken : () => authToken;
   const tokenAuthed = authToken !== undefined;
   const execute = options.execute ?? executeOperation;
+  const operations = options.operations ?? getMcpOperations();
   const server = new Server(
     { name: "easyparcel", version: CLI_VERSION },
     { capabilities: { tools: {} } },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: OPERATIONS.map((op) => ({
+    tools: operations.map((op) => ({
       name: mcpToolName(op),
       description: toolDescription(op),
       inputSchema: toolInputSchema(op),
@@ -121,7 +125,7 @@ export function buildServer(authToken?: string | (() => string | undefined), opt
     })),
   }));
 
-  const byTool = new Map(OPERATIONS.map((op) => [mcpToolName(op), op]));
+  const byTool = new Map(operations.map((op) => [mcpToolName(op), op]));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const op = byTool.get(request.params.name);
@@ -164,10 +168,11 @@ export function buildServer(authToken?: string | (() => string | undefined), opt
 }
 
 export async function runMcpServer(): Promise<void> {
-  const server = buildServer();
+  const operations = getMcpOperations();
+  const server = buildServer(undefined, { operations });
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  log.info(`EasyParcel MCP server running on stdio (${OPERATIONS.length} tools).`);
+  log.info(`EasyParcel MCP server running on stdio (${operations.length} tools).`);
   // Keep the process alive until stdin closes.
   await new Promise<void>((resolve) => {
     process.stdin.on("close", resolve);
