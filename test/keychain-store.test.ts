@@ -76,7 +76,10 @@ describe("keychain-backed credential store", () => {
     expect(fileRaw).toContain("keychain"); // storage marker present
     expect(fileRaw).toContain("cid"); // non-secret metadata stays in the index
 
-    const blob = store.get("easyparcel-cli:profile:default");
+    // Non-default config dirs get a namespaced entry (profile:default@<dir hash>).
+    const key = [...store.keys()].find((k) => k.startsWith("easyparcel-cli:profile:default"));
+    expect(key).toBeTruthy();
+    const blob = store.get(key!);
     expect(blob).toBeTruthy();
     expect(JSON.parse(blob!)).toMatchObject({ access_token: "AT", refresh_token: "RT" });
 
@@ -122,5 +125,44 @@ describe("keychain-backed credential store", () => {
     const creds = getProfileCredentials("default");
     expect(creds.access_token).toBe("AT2");
     expect(creds.refresh_token).toBe("RT1");
+  });
+});
+
+describe("keychain entries are namespaced by config directory", () => {
+  it("two config dirs with the same profile name never share a keychain entry", () => {
+    const fk = fakeKeyring();
+    __setKeyringLoader(() => fk.module);
+    const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ep-kc-a-"));
+    const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "ep-kc-b-"));
+    try {
+      process.env.EASYPARCEL_CONFIG_DIR = dirA;
+      setProfileCredentials("default", { access_token: "A-token", refresh_token: "A-refresh", token_type: "Bearer" });
+      process.env.EASYPARCEL_CONFIG_DIR = dirB;
+      setProfileCredentials("default", { access_token: "B-token", refresh_token: "B-refresh", token_type: "Bearer" });
+      expect(fk.store.size).toBe(2);
+      expect(getProfileCredentials("default").access_token).toBe("B-token");
+      clearProfile("default");
+      process.env.EASYPARCEL_CONFIG_DIR = dirA;
+      expect(getProfileCredentials("default").access_token).toBe("A-token");
+      expect([...fk.store.keys()].every((k) => k.startsWith("easyparcel-cli:profile:default@"))).toBe(true);
+    } finally {
+      fs.rmSync(dirA, { recursive: true, force: true });
+      fs.rmSync(dirB, { recursive: true, force: true });
+    }
+  });
+  it("the default ~/.easyparcel directory keeps the legacy bare entry name", () => {
+    const fk = fakeKeyring();
+    __setKeyringLoader(() => fk.module);
+    const home = path.join(os.homedir(), ".easyparcel");
+    const existed = fs.existsSync(home);
+    const backup = existed ? fs.readFileSync(path.join(home, "credentials.json"), "utf8").toString() : null;
+    process.env.EASYPARCEL_CONFIG_DIR = home;
+    try {
+      setProfileCredentials("kc-naming-probe", { access_token: "x", token_type: "Bearer" });
+      expect(fk.store.has("easyparcel-cli:profile:kc-naming-probe")).toBe(true);
+    } finally {
+      clearProfile("kc-naming-probe");
+      if (backup !== null) fs.writeFileSync(path.join(home, "credentials.json"), backup);
+    }
   });
 });

@@ -1,5 +1,8 @@
+import crypto from "node:crypto";
+import path from "node:path";
+import os from "node:os";
 import fs from "node:fs";
-import { credentialsPath } from "./paths";
+import { credentialsPath, configDir } from "./paths";
 import { ensureConfigDir } from "./config";
 import { keychainAvailable, keychainGet, keychainSet, keychainDelete } from "./keychain";
 import { log } from "./logger";
@@ -24,7 +27,15 @@ const SECRET_KEYS = ["access_token", "refresh_token", "client_secret"] as const;
 const warnedUnreadable = new Set<string>();
 
 function keychainAccount(profile: string): string {
-  return `profile:${profile}`;
+  // Entries are namespaced by the config directory: two configs (a scratch
+  // EASYPARCEL_CONFIG_DIR next to the real ~/.easyparcel, or two environments) must never
+  // read or overwrite each other's secrets under the same profile name. The default
+  // directory keeps the legacy bare name so existing installs find their tokens.
+  const dir = path.resolve(configDir());
+  const defaultDir = path.resolve(path.join(os.homedir(), ".easyparcel"));
+  if (dir === defaultDir) return `profile:${profile}`;
+  const tag = crypto.createHash("sha256").update(dir).digest("hex").slice(0, 12);
+  return `profile:${profile}@${tag}`;
 }
 
 function emptyStore(): CredentialStore {
