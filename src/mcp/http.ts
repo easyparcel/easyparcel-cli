@@ -9,6 +9,7 @@ import { createOAuthStore, seedOAuthClients, type OAuthStore } from "./store";
 import { getContext } from "../core/context";
 import { MCP_BROKER_CLIENT_ID, DEFAULT_CLIENT_SECRET } from "../core/config";
 import { log } from "../core/logger";
+import { isJwtExpired } from "../core/jwt";
 
 export interface HttpMcpOptions {
   port: number;
@@ -97,15 +98,45 @@ function jsonRpcError(res: http.ServerResponse, status: number, message: string)
   sendJson(res, status, { jsonrpc: "2.0", error: { code: -32000, message }, id: null });
 }
 
+/** WWW-Authenticate value telling an MCP client its bearer is no longer valid (decision S9). */
+export function invalidTokenChallenge(resourceMetadataUrl?: string): string {
+  return resourceMetadataUrl
+    ? `Bearer resource_metadata="${resourceMetadataUrl}", error="invalid_token"`
+    : 'Bearer realm="easyparcel", error="invalid_token"';
+}
+
+export interface HttpMcpServerHandle {
+  server: http.Server;
+  /** The bound port (useful with port 0). */
+  port: number;
+  close: () => Promise<void>;
+}
+
 /**
  * Run the EasyParcel MCP server over Streamable HTTP (the transport used by remote
  * MCP clients such as ChatGPT app connectors). Each client gets an isolated session;
- * its bearer token (sent on the initialize request) is bound to that session and used
- * for every EasyParcel API call it makes.
+ * its bearer token (sent on the initialize request, and updated by any later request that
+ * carries a newer one, e.g. after the client refreshed it) is used for every EasyParcel API
+ * call the session makes.
  */
 export async function runHttpMcpServer(opts: HttpMcpOptions): Promise<void> {
+  const handle = await startHttpMcpServer(opts);
+  await new Promise<void>((resolve) => {
+    const shutdown = () => void handle.close().then(resolve);
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+  });
+}
+
+/** Start the Streamable HTTP MCP server and return once it is listening. */
+export async function startHttpMcpServer(opts: HttpMcpOptions): Promise<HttpMcpServerHandle> {
   // One transport (and one Server, bound to that client's token) per MCP session.
   const sessions = new Map<string, StreamableHTTPServerTransport>();
+  // Current bearer per token-authed session (a refreshed token replaces the one from initialize).
+  const sessionTokens = new Map<string, { token?: string }>();
+  // S9: sessions whose upstream call answered 401, with the bearer that failed. The next request
+  // carrying that same bearer gets an HTTP 401 so the client refreshes; a new bearer clears it.
+  const invalidSessions = new Map<string, string | undefined>();
   const endpoint = opts.path.startsWith("/") ? opts.path : `/${opts.path}`;
   const requireAuth = opts.requireAuth || opts.oauth;
 
@@ -242,9 +273,30 @@ export async function runHttpMcpServer(opts: HttpMcpOptions): Promise<void> {
 
     const sessionId = req.headers["mcp-session-id"];
     const sid = Array.isArray(sessionId) ? sessionId[0] : sessionId;
+    const bearer = bearerToken(req);
+
+    // S9: an expired or upstream-rejected bearer becomes an HTTP 401 so the MCP client refreshes
+    // through this broker's /token (it never treats an isError tool result as "refresh me").
+    const invalidToken = (message: string): void => {
+      res.setHeader("WWW-Authenticate", invalidTokenChallenge(oauth ? oauth.resourceMetadataUrl(publicBaseFor(req)) : undefined));
+      jsonRpcError(res, 401, message);
+    };
+    if (bearer && isJwtExpired(bearer)) {
+      invalidToken("The access token has expired. Refresh it and retry.");
+      return;
+    }
+    if (sid && invalidSessions.has(sid)) {
+      if (bearer === undefined || bearer === invalidSessions.get(sid)) {
+        invalidToken("The access token was rejected by EasyParcel. Refresh it and retry.");
+        return;
+      }
+      invalidSessions.delete(sid);
+    }
 
     // Existing session: route GET (SSE stream), POST (messages) and DELETE (teardown).
     if (sid && sessions.has(sid)) {
+      const holder = sessionTokens.get(sid);
+      if (holder && holder.token !== undefined && bearer) holder.token = bearer;
       const transport = sessions.get(sid)!;
       const body = req.method === "POST" ? await readJsonBody(req) : undefined;
       await transport.handleRequest(req, res, body);
@@ -259,21 +311,31 @@ export async function runHttpMcpServer(opts: HttpMcpOptions): Promise<void> {
         return;
       }
 
-      const token = bearerToken(req);
+      const token = bearer;
+      const holder: { token?: string } = { token };
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id: string) => {
           sessions.set(id, transport);
+          sessionTokens.set(id, holder);
           log.info(`MCP session ${id} initialized (${token ? "token-authed" : "local creds"}).`);
         },
       });
       transport.onclose = () => {
-        if (transport.sessionId) sessions.delete(transport.sessionId);
+        if (transport.sessionId) {
+          sessions.delete(transport.sessionId);
+          sessionTokens.delete(transport.sessionId);
+          invalidSessions.delete(transport.sessionId);
+        }
       };
 
-      // Bind this client's token to its own Server instance for the life of the session.
-      const mcp = buildServer(token);
+      // Bind this client's token to its own Server instance; local-creds sessions stay token-less.
+      const mcp = buildServer(token ? () => holder.token : undefined, {
+        onUnauthorized: () => {
+          if (transport.sessionId) invalidSessions.set(transport.sessionId, holder.token);
+        },
+      });
       await mcp.connect(transport);
       await transport.handleRequest(req, res, body);
       return;
@@ -286,9 +348,11 @@ export async function runHttpMcpServer(opts: HttpMcpOptions): Promise<void> {
     server.on("error", reject);
     server.listen(opts.port, opts.host, () => resolve());
   });
+  const address = server.address();
+  const port = address && typeof address === "object" ? address.port : opts.port;
 
   log.info(
-    `EasyParcel MCP server (Streamable HTTP) on http://${fallbackHost}:${opts.port}${endpoint} ` +
+    `EasyParcel MCP server (Streamable HTTP) on http://${fallbackHost}:${port}${endpoint} ` +
       `(${OPERATIONS.length} tools, auth ${requireAuth ? "required" : "optional"}` +
       `${oauth ? ", OAuth proxy enabled" : ""}).`,
   );
@@ -305,13 +369,11 @@ export async function runHttpMcpServer(opts: HttpMcpOptions): Promise<void> {
     }
   }
 
-  await new Promise<void>((resolve) => {
-    const shutdown = () => {
+  const close = (): Promise<void> =>
+    new Promise<void>((resolve) => {
       for (const t of sessions.values()) void t.close();
       if (oauthStore) void oauthStore.close();
       server.close(() => resolve());
-    };
-    process.on("SIGINT", shutdown);
-    process.on("SIGTERM", shutdown);
-  });
+    });
+  return { server, port, close };
 }
