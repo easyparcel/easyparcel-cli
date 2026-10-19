@@ -4,6 +4,7 @@ import { collectItemErrors, effectiveStatus } from "../core/envelope";
 import { CliError, ExitCode, exitCodeForStatus } from "../core/errors";
 import { printEnvelope, printJson } from "../core/output";
 import { log } from "../core/logger";
+import { targetErrorHint } from "../core/target";
 import type { RuntimeContext } from "../core/context";
 import type { Operation } from "../operations/types";
 import type { Envelope } from "../core/types";
@@ -14,6 +15,8 @@ export interface RunInput {
   columns?: string[];
   /** Per-request bearer token (overrides stored/profile creds; used by the HTTP MCP server). */
   accessToken?: string;
+  /** Extra request headers, e.g. X-Account-Id / X-Organization-Id from MCP tool arguments. */
+  headers?: Record<string, string>;
 }
 
 /** Execute an operation and return the resulting envelope (no printing). Shared by CLI + MCP. */
@@ -37,6 +40,8 @@ export async function executeOperation(ctx: RuntimeContext, op: Operation, input
           versioned: op.versioned !== false,
           auth: op.auth !== false,
           accessToken: input.accessToken,
+          headers: input.headers,
+          target: op.target !== false,
           query: input.query,
           body: { ...baseBody, ...(cursor ? { [op.pagination!.cursorField]: cursor } : {}) },
         }),
@@ -50,6 +55,8 @@ export async function executeOperation(ctx: RuntimeContext, op: Operation, input
     versioned: op.versioned !== false,
     auth: op.auth !== false,
     accessToken: input.accessToken,
+    headers: input.headers,
+    target: op.target !== false,
     body,
     query: input.query,
   });
@@ -61,6 +68,12 @@ export function reportEnvelope(ctx: RuntimeContext, env: Envelope, columns?: str
 
   const status = effectiveStatus(env);
   if (status >= 400) {
+    const hint = targetErrorHint(env, "cli");
+    if (hint) {
+      process.exitCode = hint.usage ? ExitCode.USAGE : exitCodeForStatus(status);
+      log.error(hint.message);
+      return;
+    }
     process.exitCode = exitCodeForStatus(status);
     log.warn(`API status ${status}${env.message ? `: ${env.message}` : ""}`);
     return;
@@ -90,5 +103,14 @@ export async function runOperation(ctx: RuntimeContext, op: Operation, input: Ru
     return;
   }
   const env = await executeOperation(ctx, op, input);
+  // Listing commands render a fixed human table on a terminal (or with --format table|csv);
+  // JSON stays the default when piped, so agents and scripts see the full envelope.
+  const human =
+    ctx.format === "table" || ctx.format === "csv" || (!ctx.formatExplicit && Boolean(process.stdout.isTTY));
+  if (op.humanTable && human && effectiveStatus(env) < 400 && Array.isArray(env.data)) {
+    const format = ctx.format === "csv" ? "csv" : "table";
+    reportEnvelope({ ...ctx, format }, { ...env, data: op.humanTable.rows(env.data) }, op.humanTable.columns);
+    return;
+  }
   reportEnvelope(ctx, env, input.columns);
 }

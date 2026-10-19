@@ -144,6 +144,24 @@ export function setProfileCredentials(profile: string, creds: ProfileCredentials
   saveStore(store);
 }
 
+/**
+ * Set or remove NON-secret profile fields (e.g. default_account_id) in the file index only, so the
+ * keychain is never touched. `undefined` removes a field. Creates the profile entry if needed.
+ */
+export function updateProfileMetadata(
+  profile: string,
+  patch: Partial<Pick<ProfileCredentials, "default_account_id" | "default_organization_id">>,
+): void {
+  const store = loadStore();
+  const rec: Record<string, unknown> = { ...(store.profiles[profile] ?? {}) };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined) delete rec[k];
+    else rec[k] = v;
+  }
+  store.profiles[profile] = rec as ProfileCredentials;
+  saveStore(store);
+}
+
 export function clearProfile(profile: string): boolean {
   const store = loadStore();
   const existed = Boolean(store.profiles[profile]);

@@ -33,6 +33,7 @@ import {
 import { keychainAvailable } from "../core/keychain";
 import { tokensFromResponse, doRefresh, isExpired } from "../core/tokens";
 import { apiRequest } from "../core/client";
+import { isIdentityToken } from "../core/jwt";
 import type { RuntimeContext } from "../core/context";
 import type { TokenResponse } from "../core/types";
 
@@ -100,16 +101,43 @@ export function planAccountSync(
   };
 }
 
+const DEPRECATION_NOTICE =
+  "Deprecated: sign in once and pass --account <id> (or `ep account use <id>`); --all / auth sync will be removed in a future release.";
+let deprecationShown = false;
+
+/** Print the `--all` / `auth sync` deprecation once per process (stderr). */
+export function warnDeprecatedMultiProfile(): void {
+  if (deprecationShown) return;
+  deprecationShown = true;
+  log.warn(DEPRECATION_NOTICE);
+}
+
+/**
+ * Profile fields that describe what a fresh login reaches. An identity login covers every owned
+ * account: no account_id is stored and the target is named per call (--account /
+ * EASYPARCEL_ACCOUNT_ID / `ep account use`). The opposite marker is cleared (undefined) so a
+ * re-login on the same profile stays consistent.
+ */
+export function loginTargetFields(accessToken?: string): { identity?: true; account_id?: number | string } {
+  return isIdentityToken(accessToken)
+    ? { identity: true, account_id: undefined }
+    : { identity: undefined, account_id: accountIdFromToken(accessToken) };
+}
+
 function persistLogin(ctx: RuntimeContext, tr: TokenResponse, client: ClientCreds, grant: string): void {
+  const fields = loginTargetFields(tr.access_token);
+  const identity = fields.identity === true;
   setProfileCredentials(
     ctx.profile,
-    tokensFromResponse(tr, { client_id: client.clientId, client_secret: client.clientSecret, account_id: accountIdFromToken(tr.access_token) }),
+    tokensFromResponse(tr, { client_id: client.clientId, client_secret: client.clientSecret, ...fields }),
   );
   log.info(`Authenticated profile '${ctx.profile}' via ${grant}.`);
+  if (identity) log.info("This login covers all your accounts. Run `ep account list`, then pass --account <id> or `ep account use <id>`.");
   printJson({
     status: "ok",
     profile: ctx.profile,
     grant,
+    target_mode: identity ? "identity" : "account",
     token_type: tr.token_type,
     expires_at: tr.expires_at ?? (tr.expires_in ? new Date(Date.now() + tr.expires_in * 1000).toISOString() : null),
     has_refresh_token: Boolean(tr.refresh_token),
@@ -143,13 +171,19 @@ async function authorizeAllAccounts(
   client: ClientCreds,
   grant: string,
 ): Promise<void> {
+  // An identity login already reaches every owned account (and the server refuses switch_token
+  // for it), so one profile is all there is to save.
+  if (isIdentityToken(baseTr.access_token)) {
+    persistLogin(ctx, baseTr, client, grant);
+    return;
+  }
   // Persist the base token so apiRequest can authenticate the enumerate/switch calls.
   setProfileCredentials(
     ctx.profile,
     tokensFromResponse(baseTr, { client_id: client.clientId, client_secret: client.clientSecret }),
   );
 
-  const listEnv = await apiRequest(ctx, { method: "GET", path: "account/list_accounts" });
+  const listEnv = await apiRequest(ctx, { method: "GET", path: "account/list_accounts", target: false });
   const accounts = Array.isArray(listEnv.data) ? (listEnv.data as any[]) : [];
   if (accounts.length === 0) {
     log.warn("No accounts returned; kept the single login.");
@@ -169,6 +203,7 @@ async function authorizeAllAccounts(
         method: "POST",
         path: "account/switch_token",
         body: { account_id: acc.account_id },
+        target: false,
       });
       const data = env.data as any;
       if ((env.status_code ?? 0) >= 400 || !data || !data.access_token) {
@@ -306,16 +341,20 @@ async function withTokenLogin(ctx: RuntimeContext, opts: Record<string, any>): P
     log.warn("Token does not start with 'epat_'; personal access tokens use that prefix. Continuing.");
   }
   let verified: boolean | null = null;
+  let accounts: number | null = null;
   if (opts.verify !== false) {
     try {
       // Verify THIS token: passing it explicitly also disables the 401 → refresh retry, which
       // would otherwise answer with the stored profile's refresh token and report a bad token as fine.
-      const env = await apiRequest(ctx, { method: "GET", path: "account/get_account_information", accessToken: token });
+      // list_accounts needs no target, so it works for a personal access token on its own.
+      const env = await apiRequest(ctx, { method: "GET", path: "account/list_accounts", accessToken: token, target: false });
       verified = (env.status_code ?? 0) < 400;
+      if (verified && Array.isArray(env.data)) accounts = env.data.length;
     } catch {
       verified = false;
     }
   }
+  if (accounts !== null) log.info(`This token can reach ${accounts} account(s). Run \`ep account list\`, then pass --account <id>.`);
   printJson({
     status: "ok",
     grant: "personal_access_token",
@@ -323,6 +362,7 @@ async function withTokenLogin(ctx: RuntimeContext, opts: Record<string, any>): P
     persisted: false,
     token: masked,
     verified,
+    accounts,
     note: "Token is NOT written to disk. Set EASYPARCEL_TOKEN (or EASYPARCEL_ACCESS_TOKEN) to reuse it.",
   });
 }
@@ -378,6 +418,8 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
   const scope: string | undefined = opts.scope;
   const jsonMode = Boolean(opts.json);
   const nonInteractive = Boolean(opts.nonInteractive);
+
+  if (opts.all) warnDeprecatedMultiProfile();
 
   // --- --with-token: read an epat_ token from stdin (never persisted) ---
   if (opts.withToken) {
@@ -506,11 +548,17 @@ function statusAction(): void {
   const ctx = getContext();
   const creds = getProfileCredentials(ctx.profile);
   const authenticated = Boolean(creds.access_token || creds.refresh_token);
+  const identity =
+    Boolean(creds.identity) || isIdentityToken(creds.access_token) || Boolean(creds.access_token?.startsWith("epat_"));
   printJson({
     profile: ctx.profile,
     base_url: ctx.baseUrl,
     api_version: ctx.apiVersion,
     authenticated,
+    target_mode: identity ? "identity" : "account",
+    account_id: identity ? null : (creds.account_id ?? accountIdFromToken(creds.access_token) ?? null),
+    default_account_id: creds.default_account_id ?? null,
+    default_organization_id: creds.default_organization_id ?? null,
     token_source: tokenSource(ctx.profile),
     has_access_token: Boolean(creds.access_token),
     has_refresh_token: Boolean(creds.refresh_token),
@@ -594,12 +642,18 @@ async function logoutAction(opts: Record<string, any>): Promise<void> {
  */
 async function syncAccountsAction(opts: Record<string, any>): Promise<void> {
   const ctx = getContext();
+  warnDeprecatedMultiProfile();
   const creds = getProfileCredentials(ctx.profile);
   if (!creds.access_token && !creds.refresh_token) {
     throw new CliError(`Profile '${ctx.profile}' is not signed in. Run \`ep login\` first.`, ExitCode.AUTH);
   }
+  if (creds.identity || isIdentityToken(creds.access_token)) {
+    log.info(`Profile '${ctx.profile}' already covers all your accounts; nothing to sync. Run \`ep account list\`, then pass --account <id>.`);
+    printJson({ status: "ok", target_mode: "identity", added: [], existing: [], stale: [], failed: [] });
+    return;
+  }
   const client = resolveClient(ctx, opts);
-  const listEnv = await apiRequest(ctx, { method: "GET", path: "account/list_accounts" });
+  const listEnv = await apiRequest(ctx, { method: "GET", path: "account/list_accounts", target: false });
   if ((listEnv.status_code ?? 0) >= 400 || !Array.isArray(listEnv.data)) {
     throw new CliError(`Could not list your accounts: ${listEnv.message || `HTTP ${listEnv.status_code}`}`, ExitCode.AUTH);
   }
@@ -614,7 +668,7 @@ async function syncAccountsAction(opts: Record<string, any>): Promise<void> {
   const added: Array<{ account: unknown; account_id: number | string; profile: string }> = [];
   const failed: Array<{ account_id: number | string; reason: string }> = [];
   for (const acc of plan.add) {
-    const env = await apiRequest(ctx, { method: "POST", path: "account/switch_token", body: { account_id: acc.account_id } });
+    const env = await apiRequest(ctx, { method: "POST", path: "account/switch_token", body: { account_id: acc.account_id }, target: false });
     const data = env.data as any;
     if ((env.status_code ?? 0) >= 400 || !data || !data.access_token) {
       failed.push({ account_id: acc.account_id, reason: env.message || "could not mint token" });

@@ -6,6 +6,7 @@ import { log } from "./core/logger";
 import { addGlobalOptions } from "./cli/global";
 import { registerAuth } from "./cli/auth";
 import { registerOperations } from "./cli/register";
+import { registerTargetCommands } from "./cli/targets";
 import { registerShortcuts } from "./cli/shortcuts";
 import { registerApi } from "./cli/api";
 import { registerDescribe } from "./cli/describe";
@@ -34,6 +35,7 @@ function buildProgram(): Command {
 
   registerAuth(program);
   registerOperations(program);
+  registerTargetCommands(program);
   registerShortcuts(program);
   registerApi(program);
   registerDescribe(program);
@@ -58,6 +60,7 @@ For AI agents:
 Authentication:
   ep auth login               Browser OAuth2 + PKCE  (or set EASYPARCEL_ACCESS_TOKEN for headless use)
   ep auth status              Show current auth state
+  ep account list             Accounts this login can act on; pick one with --account <id> or \`ep account use <id>\`
 
 Output: --format json|pretty|table|ndjson|csv   ·   --data-only   ·   --dry-run (mutating cmds)
 Exit codes: 0 ok · 2 usage · 3 auth · 4 not-found · 5 validation · 6 rate-limited · 7 item-errors · 8 network

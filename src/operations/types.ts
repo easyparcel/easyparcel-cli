@@ -3,7 +3,7 @@ import type { Envelope } from "../core/types";
 
 export type JSONSchema = Record<string, unknown>;
 
-export type OperationGroup = "shipment" | "courier" | "ondemand" | "account" | "einvoice" | "address";
+export type OperationGroup = "shipment" | "courier" | "ondemand" | "account" | "organization" | "einvoice" | "address";
 
 export interface PaginationSpec {
   /** Request body field that carries the paging cursor (e.g. before_shipment_number). */
@@ -50,6 +50,11 @@ export interface Operation {
   examples?: string[];
   /** Known doc caveat surfaced in help (e.g. GET-with-body quirk). */
   docNote?: string;
+  /** false = listing call that needs no target: the context's default account / organization
+   *  is not sent (an explicit MCP account_id / organization_id still is). */
+  target?: false;
+  /** Human table for the CLI (used for --format table|csv, and by default on a terminal). */
+  humanTable?: { columns: string[]; rows: (data: unknown) => Record<string, unknown>[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +75,12 @@ export const obj = (properties: Record<string, JSONSchema>, required?: string[])
   properties,
   ...(required && required.length ? { required } : {}),
 });
+
+/** Render a boolean-ish cell for human tables ("" when unknown). */
+export function yesNo(v: unknown): string {
+  if (v === undefined || v === null || v === "") return "";
+  return v === true || v === 1 || v === "1" || v === "true" ? "yes" : "no";
+}
 
 /** Sender/receiver address schema shared across shipment operations. */
 export const addressSchema: JSONSchema = obj(
