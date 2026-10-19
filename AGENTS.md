@@ -33,22 +33,29 @@ src/
     oauth.ts          PKCE, auth URL, token/refresh/client_credentials, loopback server, openUrl.
     tokens.ts         getValidAccessToken / doRefresh / expiry handling / maybePersist.
     http.ts           Low-level node:http(s) request (handles GET-with-body; fetch can't).
-    client.ts         apiRequest(): version prefix, bearer auth, 401 refresh-retry, 429/network backoff.
+    client.ts         apiRequest(): version prefix, bearer auth, target headers, 401 refresh-retry, 429/network backoff.
+    target.ts         resolveTarget() (--account/--organization > env > profile default), X-Account-Id /
+                      X-Organization-Id headers, hints for the target error codes.
+    jwt.ts            Unverified JWT payload reads (identity token, exp) for UX only.
     envelope.ts       Parse status; collectItemErrors() for batch per-item failures.
     output.ts         Formatters: json | pretty | table | ndjson | csv; color.
     pagination.ts     paginateAll() cursor walker.
     errors.ts         CliError + ExitCode map.
   operations/         SINGLE SOURCE OF TRUTH for the API surface (drives CLI + MCP):
     types.ts          Operation interface + schema helpers (str/num/obj/...).
-    shipment.ts courier.ts ondemand.ts account.ts einvoice.ts
+    shipment.ts courier.ts ondemand.ts account.ts organization.ts einvoice.ts address.ts
     index.ts          OPERATIONS[], getOperation(), mcpToolName().
   cli/                Commander wiring:
     global.ts         addGlobalOptions(), buildLongHelp().
     run.ts            executeOperation() (shared w/ MCP), reportEnvelope(), runOperation() (+dry-run).
     register.ts       Turns OPERATIONS into grouped commands + top-level aliases.
     input.ts          resolveData(): --data string | @file | - (stdin).
+    targets.ts        `ep account use` / `ep org use` (profile default target).
     auth.ts api.ts config.ts describe.ts reference.ts shortcuts.ts mcp.ts
-  mcp/server.ts       Stdio MCP server; one tool per operation, reusing executeOperation().
+  mcp/server.ts       Stdio MCP server; one tool per operation, reusing executeOperation();
+                      every tool takes optional account_id / organization_id (sent as headers).
+  mcp/http.ts         Streamable HTTP server (hosted broker); 401 + WWW-Authenticate on expired /
+                      rejected bearers so clients refresh.
   reference/index.ts  State codes (ISO + e-invoice numeric), status tables, ID prefixes.
 ```
 

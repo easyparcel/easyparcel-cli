@@ -21,9 +21,22 @@ command prints JSON to stdout, diagnostics go to stderr, and exit codes are stab
 Use `ep describe <id>` to learn exactly what fields a command needs — do not guess.
 
 ## Authentication
-- Interactive: `ep auth login` (browser OAuth2 + PKCE). Check with `ep auth status`.
+- Interactive: `ep auth login` (browser OAuth2 + PKCE; `--device` without a browser). Check with `ep auth status`.
 - Headless / CI / agents: set `EASYPARCEL_ACCESS_TOKEN` (and optionally `EASYPARCEL_REFRESH_TOKEN`); the CLI auto-refreshes. These env vars override stored credentials and are never written to disk.
 - Not authenticated → exit code **3** with a clear message.
+
+## Choosing the account (sign in once, name the target per call)
+One login (choose "All my shipping accounts" on approval) or a personal access token reaches
+every account the person owns. `ep auth status` shows `target_mode: "identity"` for such a login.
+1. `ep account list` → `account_id`, `name`, `account_type`, `base_country`, `token_usable`.
+2. Pass `--account <id>` on any command, or store a default: `ep account use <id>` (`--clear` drops it).
+   Precedence: `--account` > `EASYPARCEL_ACCOUNT_ID` > profile default.
+3. Organizations (WhatsApp, AI agent): `ep org list`, then `--organization <id|6-letter ref>`,
+   `EASYPARCEL_ORGANIZATION_ID`, or `ep org use <id|ref>`.
+- *"This login covers all your accounts. Name one…"* (exit **2**) → the call needs an account; do steps 1–2.
+- `ACCOUNT_FORBIDDEN` / `ACCOUNT_OWNER_REQUIRED` / `ORGANIZATION_FORBIDDEN` (exit **3**) → pick another id from the list.
+- MCP tools: call `ep_account_list` / `ep_organization_list`, then pass `account_id` / `organization_id` on any tool.
+- `ep login --all` and `ep auth sync` (one profile per account) are deprecated; use `--account`.
 
 ## Passing request bodies (`--data`)
 Commands that take a body accept JSON three ways:

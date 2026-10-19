@@ -59,19 +59,24 @@ ep logout
 ```
 
 **Have more than one EasyParcel account** (e.g. a Malaysia account in MYR and a Singapore
-account in SGD)? Log them all in at once:
+account in SGD)? Sign in once and choose **All my shipping accounts** on the approval page.
+Then list what the login reaches and name the account per command:
 ```bash
-ep auth login --all
+ep account list                                   # ACCOUNT_ID NAME TYPE COUNTRY …
+ep +rates --account 123456 --from 049483 --to 018956 --weight 1   # quotes in SGD
+ep wallet --account 654321                        # MYR balance
 ```
-Created another account later? Add it without logging in again:
+Or store a default for this profile, so `--account` is only needed to pick another one:
 ```bash
-ep auth sync
+ep account use 123456        # ep account use --clear to drop it
 ```
-Then pick which to use per command (currency follows the account):
-```bash
-ep --profile sg +rates --from 049483 --to 018956 --weight 1   # quotes in SGD
-ep --profile my wallet                                        # MYR balance
-```
+The account is chosen in this order: `--account` > `EASYPARCEL_ACCOUNT_ID` > the profile
+default > none. Organizations (WhatsApp, AI agent) work the same way: `ep org list`,
+`--organization <id|ref>`, `EASYPARCEL_ORGANIZATION_ID`, `ep org use <id|ref>`.
+If a command answers *"This login covers all your accounts. Name one…"*, it needs an account.
+
+`ep auth login --all` and `ep auth sync` (one profile per account) still work for a
+release, with a deprecation notice; prefer `--account`.
 
 ---
 
@@ -123,6 +128,11 @@ Add this to your AI client's MCP config (Claude Desktop, Claude Code, Cursor, �
 Restart the app, log in once with `ep auth login`, and then just chat:
 *"Compare rates from 11950 to 55100 for a 1 kg parcel"* — the assistant runs it for you.
 
+With an all-accounts login the assistant first calls **`ep_account_list`** (and
+**`ep_organization_list`** for WhatsApp / AI-agent work), then passes **`account_id`**
+(or `organization_id`) on each tool call — every tool accepts both. Without them the
+profile default from `ep account use` (or `EASYPARCEL_ACCOUNT_ID`) applies.
+
 ### b) Teach a coding assistant how to use it (Claude Code / Cursor "Skills")
 ```bash
 ep skills install          # adds EasyParcel skills to this project
@@ -151,6 +161,11 @@ Clients authenticate per request with their **own** EasyParcel token
 (`Authorization: Bearer <token>`). Drop `--require-auth` for local testing (it then uses
 your logged‑in credentials).
 
+When a client's token has expired (or EasyParcel rejects it), the server answers HTTP 401
+with `WWW-Authenticate: … error="invalid_token"` so the client refreshes and retries.
+Tool arguments `account_id` / `organization_id` choose the target per call; the server's
+own defaults never apply to a client's token.
+
 ---
 
 ## 4. For automation / servers (no browser)
@@ -158,9 +173,11 @@ your logged‑in credentials).
 Set a token in the environment and the CLI runs fully unattended:
 ```bash
 export EASYPARCEL_ACCESS_TOKEN=...     # (and EASYPARCEL_REFRESH_TOKEN to auto‑renew)
+export EASYPARCEL_ACCOUNT_ID=123456    # the account to act on (personal access tokens / all-accounts logins)
 ep wallet
 ```
-To check a token before a job uses it, pipe it in — it is validated and never written to disk:
+To check a token before a job uses it, pipe it in — it is validated (it reports how many
+accounts it can reach) and never written to disk:
 ```bash
 printf %s "$EASYPARCEL_TOKEN" | ep login --with-token
 ```
