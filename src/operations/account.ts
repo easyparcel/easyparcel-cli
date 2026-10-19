@@ -1,4 +1,4 @@
-import type { HumanTableContext, Operation } from "./types";
+import { type HumanTableContext, type Operation, yesNo } from "./types";
 
 /** Wallet currency per base country (the API derives it the same way); blank when unknown. */
 const COUNTRY_CURRENCY: Record<string, string> = { MY: "MYR", SG: "SGD" };
@@ -7,14 +7,17 @@ const COUNTRY_CURRENCY: Record<string, string> = { MY: "MYR", SG: "SGD" };
 export function accountRows(data: unknown, ctx: HumanTableContext = {}): Record<string, unknown>[] {
   const list = Array.isArray(data) ? data : [];
   return list.map((a: any) => {
-    const country = a?.base_country ?? "";
+    // Account-bound tokens may list rows without base_country: use whatever the row carries.
+    const country = a?.base_country ?? a?.country_code ?? a?.country ?? "";
     return {
       ACCOUNT_ID: a?.account_id ?? "",
       NAME: a?.name ?? "",
       TYPE: a?.account_type ?? "",
       COUNTRY: country,
-      CURRENCY: a?.currency ?? COUNTRY_CURRENCY[String(country).toUpperCase()] ?? "",
+      CURRENCY: a?.currency ?? a?.currency_code ?? COUNTRY_CURRENCY[String(country).toUpperCase()] ?? "",
       DEFAULT: ctx.defaultAccountId !== undefined && String(a?.account_id) === String(ctx.defaultAccountId) ? "*" : "",
+      ORGANISATION: a?.organization_id ?? "",
+      TOKEN_USABLE: yesNo(a?.token_usable),
     };
   });
 }
@@ -68,7 +71,7 @@ export const accountOperations: Operation[] = [
     examples: ["ep account list", "ep account use 123456", "ep wallet --account 123456"],
     provides: ["[].account_id"],
     humanTable: {
-      columns: ["ACCOUNT_ID", "NAME", "TYPE", "COUNTRY", "CURRENCY", "DEFAULT"],
+      columns: ["ACCOUNT_ID", "NAME", "TYPE", "COUNTRY", "CURRENCY", "DEFAULT", "ORGANISATION", "TOKEN_USABLE"],
       rows: accountRows,
     },
   },

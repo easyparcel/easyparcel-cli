@@ -3,7 +3,7 @@ import * as readline from "node:readline/promises";
 import { Writable } from "node:stream";
 import { getContext } from "../core/context";
 import { addGlobalOptions } from "./global";
-import { CliError, ExitCode } from "../core/errors";
+import { CliError, ExitCode, exitCodeForStatus } from "../core/errors";
 import { log } from "../core/logger";
 import { printJson } from "../core/output";
 import { DEFAULT_CALLBACK_PORT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, MCP_BROKER_CLIENT_ID, loadConfig, saveConfig } from "../core/config";
@@ -171,15 +171,32 @@ function accessTokenFresh(creds: ProfileCredentials): boolean {
 
 /**
  * The profile's stored session when it is still good: a fresh access token, or a refresh token
- * the server accepts. Environment tokens are not a stored session.
+ * that has not passed its stored expiry. No network call: a refresh token the server has revoked
+ * shows up on the next API call, and `ep login --force` replaces it. Environment tokens are not a
+ * stored session.
  */
-async function existingSession(ctx: RuntimeContext): Promise<ProfileCredentials | undefined> {
+export function existingSession(profile: string, nowMs = Date.now()): ProfileCredentials | undefined {
   if (hasEnvAccessToken() || process.env.EASYPARCEL_REFRESH_TOKEN) return undefined;
-  if (!loadStore().profiles[ctx.profile]) return undefined;
-  const creds = getProfileCredentials(ctx.profile);
+  if (!loadStore().profiles[profile]) return undefined;
+  const creds = getProfileCredentials(profile);
   if (accessTokenFresh(creds)) return creds;
-  if (creds.refresh_token && (await doRefresh(ctx, creds))) return getProfileCredentials(ctx.profile);
+  if (creds.refresh_token) {
+    const until = creds.refresh_token_expires_at ? Date.parse(creds.refresh_token_expires_at) : NaN;
+    if (!Number.isFinite(until) || until > nowMs) return creds;
+  }
   return undefined;
+}
+
+/**
+ * Whether `ep login` should only report an existing session: plain `ep login` (also with
+ * --non-interactive, so CI logins are idempotent), never for --force, --all, --with-token,
+ * --client-credentials, or a --client-id / --scope other than the stored session's.
+ */
+export function shouldReportExistingSession(opts: Record<string, any>, stored: ProfileCredentials): boolean {
+  if (opts.force || opts.all || opts.withToken || opts.clientCredentials) return false;
+  if (opts.clientId !== undefined && opts.clientId !== stored.client_id) return false;
+  if (opts.scope !== undefined && opts.scope !== (stored.scope ?? "")) return false;
+  return true;
 }
 
 function persistLogin(ctx: RuntimeContext, tr: TokenResponse, client: ClientCreds, grant: string): void {
@@ -493,24 +510,23 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
   }
 
   // Already signed in: say so instead of opening a browser and waiting. --force signs in again.
-  if (!opts.force && !opts.clientCredentials) {
-    const session = await existingSession(ctx);
-    if (session) {
-      const flag = profileFlag(ctx.profile);
-      log.info(
-        `${signedInPhrase(session, "Already signed in")} (profile ${ctx.profile}). Use \`ep login --force${flag}\` to sign in again, or \`ep logout${flag}\`.`,
-      );
-      if (jsonMode || !process.stdout.isTTY) {
-        printJson({
-          status: "already_signed_in",
-          profile: ctx.profile,
-          signed_in_as: signedInAs(session) ?? null,
-          target_mode: session.identity || isIdentityToken(session.access_token) ? "identity" : "account",
-          expires_at: session.expires_at ?? null,
-        });
-      }
-      return;
+  const session = existingSession(ctx.profile);
+  if (session && shouldReportExistingSession(opts, session)) {
+    const flag = profileFlag(ctx.profile);
+    log.info(
+      `${signedInPhrase(session, "Already signed in")} (profile ${ctx.profile}). Use \`ep login --force${flag}\` to sign in again, or \`ep logout${flag}\`.`,
+    );
+    if (jsonMode || !process.stdout.isTTY) {
+      printJson({
+        status: "ok",
+        already_signed_in: true,
+        profile: ctx.profile,
+        signed_in_as: signedInAs(session) ?? null,
+        target_mode: session.identity || isIdentityToken(session.access_token) ? "identity" : "account",
+        expires_at: session.expires_at ?? null,
+      });
     }
+    return;
   }
 
   const client = resolveClient(ctx, opts);
@@ -822,7 +838,7 @@ async function whoamiAction(): Promise<void> {
   const ctx = getContext();
   const env = await apiRequest(ctx, { method: "GET", path: "account/get_account_information" });
   printJson(ctx.dataOnly ? env.data : env);
-  if ((env.status_code ?? 0) >= 400) process.exitCode = ExitCode.AUTH;
+  if ((env.status_code ?? 0) >= 400) process.exitCode = exitCodeForStatus(env.status_code ?? 0);
 }
 
 /** Attach the shared `login` options (used by both `ep login` and `ep auth login`). */

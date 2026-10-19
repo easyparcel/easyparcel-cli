@@ -54,9 +54,9 @@ describe("human tables", () => {
     const rows = accountRows(ACCOUNTS, { defaultAccountId: "202" });
     const out = renderTable(rows, getOperation("account.list")!.humanTable!.columns, makeColor(false));
     const lines = out.split("\n");
-    expect(lines[0].split("|").map((s) => s.trim())).toEqual(["ACCOUNT_ID", "NAME", "TYPE", "COUNTRY", "CURRENCY", "DEFAULT"]);
-    expect(lines[2]).toMatch(/101\s+\|\s+Main shop\s+\|\s+business\s+\|\s+MY\s+\|\s+MYR\s+\|\s*$/);
-    expect(lines[3]).toMatch(/202 .*SG branch.*\|\s+SGD\s+\|\s+\*\s*$/);
+    expect(lines[0].split("|").map((s) => s.trim())).toEqual(["ACCOUNT_ID", "NAME", "TYPE", "COUNTRY", "CURRENCY", "DEFAULT", "ORGANISATION", "TOKEN_USABLE"]);
+    expect(lines[2]).toMatch(/101\s+\|\s+Main shop\s+\|\s+business\s+\|\s+MY\s+\|\s+MYR\s+\|\s+\|\s+9\s+\|\s+yes\s*$/);
+    expect(lines[3]).toMatch(/202 .*SG branch.*\|\s+SGD\s+\|\s+\*\s+\|\s+\|\s+no\s*$/);
     expect(lines[4]).toMatch(/^ 303 /);
   });
 

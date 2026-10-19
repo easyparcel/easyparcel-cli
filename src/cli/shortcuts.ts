@@ -2,8 +2,9 @@ import { Command } from "commander";
 import { getContext, type RuntimeContext } from "../core/context";
 import { addGlobalOptions } from "./global";
 import { getOperation } from "../operations";
-import { executeOperation, reportEnvelope, runOperation } from "./run";
+import { executeOperation, ignoredTargetFlag, reportEnvelope, runOperation } from "./run";
 import { CliError, ExitCode } from "../core/errors";
+import { log } from "../core/logger";
 
 function num(v: unknown): number | undefined {
   if (v === undefined || v === null || v === "") return undefined;
@@ -57,11 +58,13 @@ async function ratesAction(opts: Record<string, any>): Promise<void> {
       },
     ],
   };
-  const env = await executeOperation(ctx, op, { body });
+  const { ctx: callCtx, warn } = ignoredTargetFlag(ctx, op);
+  const env = await executeOperation(callCtx, op, { body });
+  if (warn) log.warn(warn(env));
   const first = Array.isArray(env.data) ? (env.data[0] as any) : undefined;
   const quotations = first?.quotations;
   if (!Array.isArray(quotations)) {
-    reportEnvelope(ctx, env);
+    reportEnvelope(ctx, env, undefined, op);
     return;
   }
   const rows = quotations.map((q: any) => ({
@@ -81,7 +84,7 @@ async function ratesAction(opts: Record<string, any>): Promise<void> {
     "price",
     "currency",
     "delivery",
-  ]);
+  ], op);
 }
 
 async function trackAction(awb: string[], _opts: Record<string, any>): Promise<void> {
@@ -90,10 +93,12 @@ async function trackAction(awb: string[], _opts: Record<string, any>): Promise<v
   if (!awb || awb.length === 0) {
     throw new CliError("`+track` requires at least one AWB number.", ExitCode.USAGE);
   }
-  const env = await executeOperation(ctx, op, { body: { awb_numbers: awb } });
+  const { ctx: callCtx, warn } = ignoredTargetFlag(ctx, op);
+  const env = await executeOperation(callCtx, op, { body: { awb_numbers: awb } });
+  if (warn) log.warn(warn(env));
   const results = (env.data as any)?.results ?? env.data;
   if (!Array.isArray(results)) {
-    reportEnvelope(ctx, env);
+    reportEnvelope(ctx, env, undefined, op);
     return;
   }
   const rows = results.map((r: any) => ({
@@ -103,7 +108,7 @@ async function trackAction(awb: string[], _opts: Record<string, any>): Promise<v
     latest: r.latest_tracking_status ?? r.message ?? "",
     updated: r.latest_event_date ?? "",
   }));
-  reportEnvelope(humanCtx(ctx), { ...env, data: rows }, ["awb", "status", "code", "latest", "updated"]);
+  reportEnvelope(humanCtx(ctx), { ...env, data: rows }, ["awb", "status", "code", "latest", "updated"], op);
 }
 
 async function shipAction(opts: Record<string, any>): Promise<void> {

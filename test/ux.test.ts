@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { signedInAs, statusLine } from "../src/cli/auth";
+import { shouldReportExistingSession, signedInAs, statusLine } from "../src/cli/auth";
 import { walletRows } from "../src/operations/account";
 import { getOperation } from "../src/operations";
 import { renderTable, makeColor } from "../src/core/output";
@@ -51,5 +51,19 @@ describe("ep wallet --format table", () => {
     expect(out[0].split("|").map((s) => s.trim())).toEqual(["WALLET", "BALANCE", "CURRENCY"]);
     expect(out[2]).toMatch(/credit\s+\|\s+152.18\s+\|\s+MYR/);
     expect(out[3]).toMatch(/free credit\s+\|\s+3\s+\|\s+MYR/);
+  });
+});
+
+describe("ep login with an existing session", () => {
+  const stored = { client_id: "3cc227a9-4700-4fe9-a382-09a975104019", scope: "", refresh_token: "r" };
+  it("reports the session for plain and --non-interactive logins", () => {
+    expect(shouldReportExistingSession({}, stored)).toBe(true);
+    expect(shouldReportExistingSession({ nonInteractive: true }, stored)).toBe(true);
+    expect(shouldReportExistingSession({ clientId: stored.client_id, scope: "" }, stored)).toBe(true);
+  });
+  it("signs in again for --force, --all, --with-token, --client-credentials or another client / scope", () => {
+    for (const o of [{ force: true }, { all: true }, { withToken: true }, { clientCredentials: true }, { clientId: "other" }, { scope: "order:write" }]) {
+      expect(shouldReportExistingSession(o, stored), JSON.stringify(o)).toBe(false);
+    }
   });
 });
