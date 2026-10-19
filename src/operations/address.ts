@@ -20,5 +20,6 @@ export const addressOperations: Operation[] = [
     }),
     example: { search: "john", limit: 20 },
     examples: [`ep address search --data '{"search":"john"}'`, `ep +address john`],
+    provides: ["[]"],
   },
 ];

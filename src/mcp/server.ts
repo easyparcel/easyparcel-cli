@@ -1,9 +1,10 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { OPERATIONS, mcpToolName } from "../operations";
+import { OPERATIONS, mcpToolName, mcpPrerequisiteText } from "../operations";
 import type { Operation } from "../operations/types";
 import { executeOperation } from "../cli/run";
+import { prerequisiteHint } from "../cli/hints";
 import { collectItemErrors, effectiveStatus } from "../core/envelope";
 import { getContext } from "../core/context";
 import { CliError } from "../core/errors";
@@ -76,7 +77,7 @@ export interface BuildServerOptions {
   execute?: typeof executeOperation;
 }
 
-function toolDescription(op: Operation): string {
+export function toolDescription(op: Operation): string {
   const parts = [op.summary + "."];
   if (op.description) parts.push(op.description);
   parts.push(`Endpoint: ${op.method} /open_api/{version}/${op.path}.`);
@@ -84,6 +85,8 @@ function toolDescription(op: Operation): string {
   if (op.pagination) parts.push("Cursor-paginated; pass the cursor field to page.");
   if (op.docNote) parts.push(`Note: ${op.docNote}`);
   if (op.mutating) parts.push("MUTATING: this creates/cancels orders and may charge your wallet.");
+  const prereq = mcpPrerequisiteText(op);
+  if (prereq) parts.push(prereq);
   return parts.join(" ");
 }
 
@@ -139,6 +142,8 @@ export function buildServer(authToken?: string | (() => string | undefined), opt
       if (isError) summaryLines.push(`API status ${status}${env.message ? `: ${env.message}` : ""}`);
       const hint = isError ? targetErrorHint(env, "mcp") : undefined;
       if (hint) summaryLines.push(hint.message);
+      const edgeHint = prerequisiteHint(op, env, "mcp");
+      if (edgeHint) summaryLines.push(edgeHint);
       if (itemErrors.length) {
         summaryLines.push(`${itemErrors.length} batch item(s) failed:`);
         for (const e of itemErrors) summaryLines.push(`  - item ${e.index}: ${e.errors.join("; ")}`);

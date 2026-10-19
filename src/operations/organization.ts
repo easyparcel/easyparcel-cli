@@ -27,6 +27,7 @@ export const organizationOperations: Operation[] = [
     body: "none",
     target: false,
     examples: ["ep org list", "ep org use ABCDEF"],
+    provides: ["[].organization_id"],
     humanTable: {
       columns: ["ORG_ID", "REF", "NAME", "ROLE", "WHATSAPP", "AI_AGENT"],
       rows: organizationRows,

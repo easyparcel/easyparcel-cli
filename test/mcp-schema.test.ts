@@ -57,6 +57,27 @@ describe("MCP tool schemas", () => {
   });
 });
 
+describe("MCP tool prerequisites", () => {
+  it("tool descriptions name the tools that supply their inputs", async () => {
+    const client = await connect(buildServer());
+    const { tools } = await client.listTools();
+    const desc = (name: string) => tools.find((t) => t.name === name)!.description ?? "";
+    expect(desc("ep_shipment_submit")).toContain("Prerequisites: shipment[].service_id from ep_shipment_quote");
+    expect(desc("ep_shipment_track")).toContain("awb_numbers from ep_shipment_list ([].awb_number)");
+    expect(desc("ep_ondemand_order")).toContain("metadata.quotationId from ep_ondemand_quote");
+    expect(desc("ep_account_wallet")).toContain("account_id from ep_account_list");
+    expect(desc("ep_account_list")).not.toContain("Prerequisites:");
+  });
+
+  it("a failed call whose error names a prerequisite gets the hint", async () => {
+    const execute = vi.fn(async () => ({ status_code: 400, message: "Missing Required Param;", data: { shipment_number: ["The shipment number field is required."] } }));
+    const client = await connect(buildServer(undefined, { execute: execute as any }));
+    const res = await client.callTool({ name: "ep_shipment_details", arguments: {} });
+    expect(res.isError).toBe(true);
+    expect((res.content as Array<{ text: string }>)[0].text).toContain("hint: shipment_number comes from ep_shipment_list ([].shipment_number) — call that first.");
+  });
+});
+
 describe("MCP CallTool target handling", () => {
   it("strips account_id / organization_id from the body and forwards them as headers", async () => {
     const calls: RunInput[] = [];

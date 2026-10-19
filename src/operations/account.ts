@@ -47,6 +47,7 @@ export const accountOperations: Operation[] = [
     body: "none",
     target: false,
     examples: ["ep account list", "ep account use 123456", "ep wallet --account 123456"],
+    provides: ["[].account_id"],
     humanTable: {
       columns: ["ACCOUNT_ID", "NAME", "TYPE", "COUNTRY", "ORGANISATION", "TOKEN_USABLE"],
       rows: accountRows,

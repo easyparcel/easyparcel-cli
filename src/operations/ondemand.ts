@@ -79,6 +79,7 @@ export const ondemandOperations: Operation[] = [
         { coordinates: { latitude: 3.139, longitude: 101.6869 }, type: "dropoff" },
       ],
     },
+    provides: ["[].quotations[].courier.service_id", "[].quotations[].metadata.quotationId"],
   },
   {
     id: "ondemand.order",
@@ -92,6 +93,12 @@ export const ondemandOperations: Operation[] = [
     body: "json",
     bodyRequired: true,
     schema: ondemandOrderBody,
+    prerequisites: [
+      { param: "ondemand_service_id", from: "ondemand.quote", field: "[].quotations[].courier.service_id" },
+      { param: "metadata.quotationId", from: "ondemand.quote", field: "[].quotations[].metadata.quotationId", note: "Use the quotationId of the same quotation as the service id." },
+      { param: "coupon_codes", from: "ondemand.coupon-list", field: "coupons[].coupon_code", when: "paying with a coupon" },
+    ],
+    provides: ["booking_id"],
   },
   {
     id: "ondemand.coupon-list",
@@ -104,6 +111,11 @@ export const ondemandOperations: Operation[] = [
     bodyRequired: true,
     docNote: "GET-with-body endpoint (same body shape as `ondemand order`).",
     schema: ondemandOrderBody,
+    prerequisites: [
+      { param: "ondemand_service_id", from: "ondemand.quote", field: "[].quotations[].courier.service_id" },
+      { param: "metadata.quotationId", from: "ondemand.quote", field: "[].quotations[].metadata.quotationId" },
+    ],
+    provides: ["coupons[].coupon_code"],
   },
   {
     id: "ondemand.cancel",
@@ -117,6 +129,10 @@ export const ondemandOperations: Operation[] = [
     bodyRequired: true,
     schema: obj({ booking_id: str('e.g. "EOD-150"') }, ["booking_id"]),
     example: { booking_id: "EOD-150" },
+    prerequisites: [
+      { param: "booking_id", from: "ondemand.list", field: "[].booking_id" },
+      { param: "booking_id", from: "ondemand.order", field: "booking_id", when: "just booked" },
+    ],
   },
   {
     id: "ondemand.list",
@@ -136,6 +152,7 @@ export const ondemandOperations: Operation[] = [
     }),
     pagination: { cursorField: "before_booking_number", nextCursor: nextBookingCursor },
     example: { limit: 20 },
+    provides: ["[].booking_id"],
   },
   {
     id: "ondemand.details",
@@ -148,5 +165,9 @@ export const ondemandOperations: Operation[] = [
     bodyRequired: true,
     schema: obj({ booking_id: str('e.g. "EOD-150"') }, ["booking_id"]),
     example: { booking_id: "EOD-150" },
+    prerequisites: [
+      { param: "booking_id", from: "ondemand.list", field: "[].booking_id" },
+      { param: "booking_id", from: "ondemand.order", field: "booking_id", when: "just booked" },
+    ],
   },
 ];

@@ -1,9 +1,23 @@
 import { Command } from "commander";
-import { OPERATIONS, getOperation, mcpToolName, GROUP_SUMMARY } from "../operations";
+import { OPERATIONS, getOperation, mcpToolName, GROUP_SUMMARY, prerequisitesOf, cliCommand, targetScope } from "../operations";
+import type { Operation } from "../operations/types";
 import { getContext } from "../core/context";
 import { addGlobalOptions } from "./global";
 import { printJson } from "../core/output";
 import { CliError, ExitCode } from "../core/errors";
+
+/** The prerequisite edges as `ep describe` prints them (with the CLI command of each source). */
+export function describePrerequisites(op: Operation): Array<Record<string, unknown>> {
+  return prerequisitesOf(op).map((e) => ({
+    param: e.param,
+    from: e.from,
+    from_command: cliCommand(e.from),
+    from_mcp_tool: getOperation(e.from) ? mcpToolName(getOperation(e.from)!) : null,
+    field: e.field ?? null,
+    when: e.when ?? null,
+    note: e.note ?? null,
+  }));
+}
 
 /**
  * Machine-readable catalog so AI agents can introspect every operation,
@@ -35,6 +49,8 @@ export function registerDescribe(program: Command): void {
             paginated: Boolean(o.pagination),
             summary: o.summary,
             mcp_tool: mcpToolName(o),
+            target: targetScope(o) ?? null,
+            prerequisites: describePrerequisites(o),
           })),
         });
         return;
@@ -63,6 +79,9 @@ export function registerDescribe(program: Command): void {
         example: op.example ?? null,
         examples: op.examples ?? [],
         mcp_tool: mcpToolName(op),
+        target: targetScope(op) ?? null,
+        prerequisites: describePrerequisites(op),
+        provides: op.provides ?? [],
       });
     });
 

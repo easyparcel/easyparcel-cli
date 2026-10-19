@@ -5,6 +5,7 @@ import { CliError, ExitCode, exitCodeForStatus } from "../core/errors";
 import { printEnvelope, printJson } from "../core/output";
 import { log } from "../core/logger";
 import { targetErrorHint } from "../core/target";
+import { prerequisiteHint } from "./hints";
 import type { RuntimeContext } from "../core/context";
 import type { Operation } from "../operations/types";
 import type { Envelope } from "../core/types";
@@ -62,20 +63,26 @@ export async function executeOperation(ctx: RuntimeContext, op: Operation, input
   });
 }
 
-/** Print the envelope and set the process exit code based on status / item errors. */
-export function reportEnvelope(ctx: RuntimeContext, env: Envelope, columns?: string[]): void {
+/**
+ * Print the envelope and set the process exit code based on status / item errors. With `op`, a
+ * failure whose error names a field another operation supplies gets one `hint:` line.
+ */
+export function reportEnvelope(ctx: RuntimeContext, env: Envelope, columns?: string[], op?: Operation): void {
   printEnvelope(env, ctx, { columns });
 
   const status = effectiveStatus(env);
+  const edgeHint = op ? prerequisiteHint(op, env, "cli") : undefined;
   if (status >= 400) {
     const hint = targetErrorHint(env, "cli");
     if (hint) {
       process.exitCode = hint.usage ? ExitCode.USAGE : exitCodeForStatus(status);
       log.error(hint.message);
+      if (edgeHint) log.info(edgeHint);
       return;
     }
     process.exitCode = exitCodeForStatus(status);
     log.warn(`API status ${status}${env.message ? `: ${env.message}` : ""}`);
+    if (edgeHint) log.info(edgeHint);
     return;
   }
 
@@ -85,6 +92,7 @@ export function reportEnvelope(ctx: RuntimeContext, env: Envelope, columns?: str
     for (const e of itemErrors) {
       log.warn(`  - item ${e.index}${e.status ? ` [${e.status}]` : ""}: ${e.errors.join("; ") || "(no detail)"}`);
     }
+    if (edgeHint) log.info(edgeHint);
     if (ctx.failOnItemError) process.exitCode = ExitCode.ITEM_ERRORS;
   }
 }
@@ -109,8 +117,8 @@ export async function runOperation(ctx: RuntimeContext, op: Operation, input: Ru
     ctx.format === "table" || ctx.format === "csv" || (!ctx.formatExplicit && Boolean(process.stdout.isTTY));
   if (op.humanTable && human && effectiveStatus(env) < 400 && Array.isArray(env.data)) {
     const format = ctx.format === "csv" ? "csv" : "table";
-    reportEnvelope({ ...ctx, format }, { ...env, data: op.humanTable.rows(env.data) }, op.humanTable.columns);
+    reportEnvelope({ ...ctx, format }, { ...env, data: op.humanTable.rows(env.data) }, op.humanTable.columns, op);
     return;
   }
-  reportEnvelope(ctx, env, input.columns);
+  reportEnvelope(ctx, env, input.columns, op);
 }

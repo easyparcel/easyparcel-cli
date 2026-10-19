@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import type { Operation } from "../operations/types";
+import { prerequisiteLines } from "../operations";
 
 /**
  * Attach the global options. Defined WITHOUT commander-level defaults so that
@@ -42,6 +43,10 @@ export function buildLongHelp(op: Operation): string {
   const lines: string[] = [];
   if (op.description) lines.push("", op.description);
   if (op.docNote) lines.push("", `Note: ${op.docNote}`);
+  const before = prerequisiteLines(op);
+  if (before.length) {
+    lines.push("", "Before you call this (fetch these values first, never guess them):", ...before.map((l) => "  " + l));
+  }
   if (op.body !== "none") {
     lines.push("", "Request body: --data '<json>' | --data @file.json | --data -  (stdin)");
   }
