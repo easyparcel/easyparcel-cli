@@ -39,10 +39,13 @@ On macOS/Linux, make it runnable first: `chmod +x easyparcel-*`.
 ## 1. Log in (one step)
 
 ```bash
-ep auth login
+ep login
 ```
-Your browser opens, you approve, done — tokens are saved in your OS keychain (or a private
-file where there is none). No app registration, no API keys to copy.
+Your browser opens the EasyParcel sign-in page; after you approve, the browser hands the result
+back to the CLI on `http://localhost:8788/callback` and you are done. Tokens are saved in your OS
+keychain (or a private file where there is none). No app registration, no API keys to copy.
+Running `ep login` again while you are signed in only tells you who is signed in; use
+`ep login --force` to sign in again (`ep auth login` is the same command).
 
 Prefer the device code? The CLI shows a short code and, on a desktop, opens the approval page
 for you (the code stays printed, and `--no-browser` prints it only); on a machine with no
@@ -54,17 +57,21 @@ ep login --device
 The approval page names the computer (`EasyParcel CLI on <host>`); set `EASYPARCEL_DEVICE_NAME`
 to show a different label. Only approve codes you started yourself.
 
+Other ways in: `--with-token` checks a personal access token piped on stdin (see section 4),
+`--non-interactive` fails instead of waiting for a person.
+
 Check anytime, and sign out (this also revokes the session on the server):
 ```bash
-ep auth status
+ep auth status     # Signed in — all accounts; profile default; token expires in 42 min; storage keychain
 ep logout
 ```
+On a terminal `ep auth status` prints that one line; piped (or with `--format json`) it prints JSON.
 
 **Have more than one EasyParcel account** (e.g. a Malaysia account in MYR and a Singapore
 account in SGD)? Sign in once and choose **All my shipping accounts** on the approval page.
 Then list what the login reaches and name the account per command:
 ```bash
-ep account list                                   # ACCOUNT_ID NAME TYPE COUNTRY …
+ep account list                                   # ACCOUNT_ID NAME TYPE COUNTRY CURRENCY DEFAULT
 ep +rates --account 123456 --from 049483 --to 018956 --weight 1   # quotes in SGD
 ep wallet --account 654321                        # MYR balance
 ```
@@ -77,7 +84,10 @@ default > none. Organizations (WhatsApp, AI agent) work the same way: `ep org li
 `--organization <id|ref>`, `EASYPARCEL_ORGANIZATION_ID`, `ep org use <id|ref>`.
 If a command answers *"This login covers all your accounts. Name one…"*, it needs an account.
 
-`ep auth login --all` and `ep auth sync` (one profile per account) still work for a
+`--account` is ignored by organization-only commands and `--organization` by account commands
+(e.g. `ep wallet`); the CLI warns and says which account answered.
+
+`ep login --all` and `ep auth sync` (one profile per account) still work for a
 release, with a deprecation notice; prefer `--account`.
 
 ---
@@ -93,6 +103,8 @@ release, with a deprecation notice; prefer `--account`.
 | Find a saved address | `ep +address "john"` |
 | Book a simple parcel | `ep +ship --service-id … --collection-date … --weight … --sender-… --receiver-…` |
 | List your shipments | `ep shipments` |
+| Parcel categories (for DDP) | `ep shipment parcel-categories` |
+| One PDF of consignment notes for several AWBs | `ep shipment bulk-awbs --data '{"awb":["EP…","EP…"]}'` |
 
 Anything that spends credit (booking, cancelling) supports **`--dry-run`** — it shows
 exactly what would be sent, without doing it:
@@ -101,13 +113,34 @@ ep shipment submit --dry-run --data @order.json
 ```
 
 Prefer a table or spreadsheet? Add `--format table` or `--format csv` (default is JSON).
+`ep account list`, `ep org list`, `ep wallet` and `ep shipment parcel-categories` already show a
+table on a terminal; piped output stays JSON.
+
+When a call fails you get one readable line on stderr, plus a hint when the fix is to fetch a
+value first:
+```
+error: Missing Required Param: The shipment number field is required. (400)
+hint: shipment_number comes from `ep shipment list` — run that first.
+```
+The full JSON error goes to stdout when stdout is not a terminal or you pass `--format json`, so
+scripts and agents still get it; `-v` also prints it on stderr.
 
 Not sure what a command needs? Ask the CLI:
 ```bash
 ep --help                 # everything
 ep shipment --help        # shipping commands
+ep shipment track --help  # incl. "Before you call this": where each id comes from
 ep describe               # full machine‑readable list (handy for AI)
 ```
+Ids are never guessed: each command's help lists the values to fetch first, for example
+`ep shipment track --help`:
+```
+Before you call this (fetch these values first, never guess them):
+  awb_numbers  ← ep shipment list  ([].awb_number)
+  awb_numbers  ← ep shipment submit  ([].shipments[].awb_number)  when just booked
+  account_id   ← ep account list  ([].account_id)  when the login covers all your accounts. Pass it as --account <id> (MCP: account_id).
+```
+The same edges are in `ep describe` (`prerequisites`) and in every MCP tool description.
 
 ---
 
@@ -127,13 +160,15 @@ Add this to your AI client's MCP config (Claude Desktop, Claude Code, Cursor, �
   }
 }
 ```
-Restart the app, log in once with `ep auth login`, and then just chat:
+Restart the app, log in once with `ep login`, and then just chat:
 *"Compare rates from 11950 to 55100 for a 1 kg parcel"* — the assistant runs it for you.
 
 With an all-accounts login the assistant first calls **`ep_account_list`** (and
 **`ep_organization_list`** for WhatsApp / AI-agent work), then passes **`account_id`**
 (or `organization_id`) on each tool call — every tool accepts both. Without them the
-profile default from `ep account use` (or `EASYPARCEL_ACCOUNT_ID`) applies.
+profile default from `ep account use` (or `EASYPARCEL_ACCOUNT_ID`) applies. Each tool description
+ends with its prerequisites (e.g. `service_id from ep_shipment_quote`), so the assistant fetches
+ids instead of guessing them.
 
 ### b) Teach a coding assistant how to use it (Claude Code / Cursor "Skills")
 ```bash
@@ -204,9 +239,12 @@ binary, it points you to the latest release. The `npx … mcp` setup auto‑uses
 - **Where things are saved:** config in `~/.easyparcel/`; login tokens in the OS keychain
   (`ep auth status` shows `"storage"`), or in `~/.easyparcel/credentials.json` (readable only by
   you) on machines without one.
-- **Demo vs live:** you're using whichever EasyParcel account you logged in with.
-- **Exit codes** (for scripts): `0` ok · `3` not logged in · `4` not found · `5` bad input ·
-  `6` rate‑limited · `7` some batch items failed.
+- **Live, not a demo:** the CLI talks to the live EasyParcel API at `api.easyparcel.com`, with
+  the account you signed in with. There is no sandbox, so use `--dry-run` for anything that
+  spends credit (booking, cancelling).
+- **Exit codes** (for scripts): `0` ok · `2` usage error · `3` not logged in · `4` not found ·
+  `5` bad input · `6` rate‑limited · `7` some batch items failed (with `--fail-on-item-error`) ·
+  `8` network · `9` forbidden (signed in, but not allowed: scope, owner-only or another account).
 - **Coverage:** couriers for Malaysia (MY) and Singapore (SG).
 
 ## Building / contributing
