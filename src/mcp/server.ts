@@ -146,7 +146,7 @@ export function buildServer(authToken?: string | (() => string | undefined), opt
       if (edgeHint) summaryLines.push(edgeHint);
       if (itemErrors.length) {
         summaryLines.push(`${itemErrors.length} batch item(s) failed:`);
-        for (const e of itemErrors) summaryLines.push(`  - item ${e.index}: ${e.errors.join("; ")}`);
+        for (const e of itemErrors) summaryLines.push(`  - item ${e.label ?? e.index}: ${e.errors.join("; ")}`);
       }
       const text = (summaryLines.length ? summaryLines.join("\n") + "\n\n" : "") + JSON.stringify(env, null, 2);
       return {

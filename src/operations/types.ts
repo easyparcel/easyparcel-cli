@@ -22,6 +22,9 @@ export interface Prerequisite {
   when?: string;
   /** One short sentence. */
   note?: string;
+  /** false: never named in error hints (the value is the caller's own, e.g. an address).
+   *  Edges without a `field` are never hinted either. */
+  hint?: false;
 }
 
 /** Which target an operation acts on (the X-Account-Id / X-Organization-Id it reads). */

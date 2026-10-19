@@ -70,7 +70,7 @@ export const einvoiceOperations: Operation[] = [
       {
         param: "tin_no",
         from: "einvoice.verify-access",
-        note: "Verify the same tin_no / id_no / id_type first: it fails until EasyParcel is added as your intermediary on the MyInvois portal.",
+        note: "Use the same tin_no / id_no / id_type; it fails until EasyParcel is your intermediary on the MyInvois portal.",
       },
     ],
   },

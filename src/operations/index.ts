@@ -94,8 +94,8 @@ export function prerequisiteLines(op: Operation): string[] {
   if (!edges.length) return [];
   const width = Math.min(28, Math.max(...edges.map((e) => e.param.length)));
   return edges.map((e) => {
-    let line = `${e.param.padEnd(width)}  ← ${cliCommand(e.from)}`;
-    if (e.field) line += `  (${e.field})`;
+    // Without a field the source is a check to run first, not a value to copy.
+    let line = e.field ? `${e.param.padEnd(width)}  ← ${cliCommand(e.from)}  (${e.field})` : `${e.param.padEnd(width)}  ← run ${cliCommand(e.from)} first`;
     if (e.when) line += `  when ${e.when}`;
     if (e.note) line += `. ${e.note}`;
     return line;
@@ -108,8 +108,8 @@ export function mcpPrerequisiteText(op: Operation): string | undefined {
   if (!edges.length) return undefined;
   const parts = edges.map((e) => {
     const from = getOperation(e.from);
-    let t = `${e.param} from ${from ? mcpToolName(from) : e.from}`;
-    if (e.field) t += ` (${e.field})`;
+    const tool = from ? mcpToolName(from) : e.from;
+    let t = e.field ? `${e.param} from ${tool} (${e.field})` : `${e.param}: call ${tool} first`;
     if (e.when) t += ` when ${e.when}`;
     return t;
   });

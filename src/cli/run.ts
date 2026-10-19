@@ -101,7 +101,8 @@ export function friendlyError(env: Envelope): string {
 export function reportEnvelope(ctx: RuntimeContext, env: Envelope, columns?: string[], op?: Operation): void {
   const status = effectiveStatus(env);
   if (status >= 400) {
-    if (machineErrors(ctx)) printJson(ctx.dataOnly ? env.data : env);
+    // Keep the chosen format (ndjson stays one line per row, csv/table stay csv/table).
+    if (machineErrors(ctx)) printEnvelope(env, ctx, { columns });
     const target = targetErrorHint(env, "cli");
     if (target) {
       process.exitCode = target.usage ? ExitCode.USAGE : exitCodeForStatus(status);
@@ -121,7 +122,7 @@ export function reportEnvelope(ctx: RuntimeContext, env: Envelope, columns?: str
   if (itemErrors.length) {
     log.warn(`${itemErrors.length} batch item(s) failed:`);
     for (const e of itemErrors) {
-      log.warn(`  - item ${e.index}${e.status ? ` [${e.status}]` : ""}: ${e.errors.join("; ") || "(no detail)"}`);
+      log.warn(`  - item ${e.label ?? e.index}${e.status ? ` [${e.status}]` : ""}: ${e.errors.join("; ") || "(no detail)"}`);
     }
     const hint = op ? prerequisiteHint(op, env, "cli") : undefined;
     if (hint) log.info(hint);

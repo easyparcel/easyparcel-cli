@@ -8,6 +8,7 @@ import { buildLongHelp } from "../src/cli/global";
 import { describePrerequisites } from "../src/cli/describe";
 import { toolDescription } from "../src/mcp/server";
 import { matchPrerequisite, prerequisiteHint } from "../src/cli/hints";
+import { collectItemErrors } from "../src/core/envelope";
 import { buildContext } from "../src/core/context";
 import { ExitCode, exitCodeForStatus } from "../src/core/errors";
 import { friendlyError, ignoredTargetFlag, reportEnvelope } from "../src/cli/run";
@@ -74,9 +75,13 @@ describe("prerequisite graph integrity", () => {
   it("carries the expected core edges", () => {
     const edge = (id: string, param: string) => prerequisitesOf(getOperation(id)!).filter((e) => e.param === param).map((e) => e.from);
     expect(edge("shipment.submit", "shipment[].service_id")).toEqual(["shipment.quote"]);
-    expect(edge("shipment.track", "awb_numbers")).toEqual(["shipment.list", "shipment.submit"]);
+    expect(edge("shipment.track", "awb_numbers")).toEqual(["shipment.list", "shipment.submit", "shipment.details"]);
+    expect(edge("shipment.cancel", "cancel_list[].shipment_number")).toEqual(["shipment.list", "shipment.submit"]);
+    expect(edge("shipment.insurance-quote", "list[].courier_service_id")).toEqual(["shipment.quote"]);
+    // API 2026-03 ignores a caller's insurance[]: EasyCover is requested with the feature flag
+    expect(edge("shipment.submit", "shipment[].insurance[].insurance_service_id")).toEqual([]);
+    expect(edge("shipment.submit", "shipment[].feature.add_on_easy_cover")).toEqual(["shipment.insurance-quote"]);
     expect(edge("shipment.details", "shipment_number")).toContain("shipment.list");
-    expect(edge("shipment.cancel", "cancel_list[].shipment_number")).toEqual(["shipment.list"]);
     expect(edge("ondemand.order", "metadata.quotationId")).toEqual(["ondemand.quote"]);
     expect(edge("ondemand.cancel", "booking_id")).toContain("ondemand.list");
     expect(edge("ondemand.details", "booking_id")).toContain("ondemand.list");
@@ -113,26 +118,62 @@ describe("prerequisites on every surface", () => {
 
 describe("error hints", () => {
   const env = (status: number, message: string, data: unknown = null) => ({ status_code: status, message, data });
+  /** submit_orders 2026-03: HTTP 200, failures nested at data[0].shipments[] with the request echoed. */
+  const submitFailure = (errors: string[]) => ({
+    status_code: 200,
+    message: "0 requests success, 1 request error.",
+    data: [
+      {
+        order_details: { account_id: 187874 },
+        pricing: { currency_code: "MYR", total_amount: "0.00", total_tax_amount: "0.00" },
+        shipments: [
+          {
+            status: "error",
+            collection_date: "2026-10-21",
+            sender: { point_code: null, name: "Alice", address1: "1 Jln A", postcode: "11950", country_code: "MY" },
+            receiver: { point_code: null, name: "Bob", address1: "2 Jln B", postcode: "55100", country_code: "MY" },
+            errors,
+          },
+        ],
+      },
+    ],
+  });
+  const submit = getOperation("shipment.submit")!;
 
-  it("names the source of a param the error mentions", () => {
-    const submit = getOperation("shipment.submit")!;
-    const e = env(400, "Invalid input Error", ["The shipment 0 service_id field is required."]);
+  it("names the source of a param the error mentions (validator writes field names with spaces)", () => {
+    const e = submitFailure(["The service id field is required."]);
     expect(prerequisiteHint(submit, e)).toBe("hint: service_id comes from `ep shipment quote` — run that first.");
     expect(prerequisiteHint(submit, e, "mcp")).toContain("ep_shipment_quote");
-    expect(prerequisiteHint(getOperation("shipment.details")!, env(404, "No Order with shipment_number ES-1 found"))).toContain("ep shipment list");
+    expect(prerequisiteHint(getOperation("shipment.details")!, env(400, "No Order with shipment_number ES-1 found from this account"))).toContain("ep shipment list");
     expect(prerequisiteHint(getOperation("shipment.bulk-awbs")!, env(400, "Awb not found"))).toContain("ep shipment list");
-    // the validator writes field names with spaces
-    expect(prerequisiteHint(submit, env(400, "Invalid input Error", ["The shipment.0.service id field is required."]))).toContain("ep shipment quote");
     expect(prerequisiteHint(getOperation("shipment.details")!, env(400, "Missing Required Param;", { shipment_number: ["The shipment number field is required."] }))).toContain(
       "ep shipment list",
     );
   });
 
+  it("collects the nested submit errors as item errors", () => {
+    const items = collectItemErrors(submitFailure(["Insufficient credit"]));
+    expect(items).toEqual([expect.objectContaining({ index: 0, label: "0.shipments[0]", status: "error", errors: ["Insufficient credit"] })]);
+  });
+
+  it("never matches keys of an echoed request object", () => {
+    // every failed shipment echoes sender.point_code / receiver: no drop-off or address hint
+    expect(prerequisiteHint(submit, submitFailure(["Insufficient credit"]))).toBeUndefined();
+  });
+
+  it("skips hint:false and field-less edges", () => {
+    expect(prerequisiteHint(submit, submitFailure(["The receiver name field is required."]))).toBeUndefined();
+    const einvoice = getOperation("einvoice.submit")!;
+    expect(prerequisiteHint(einvoice, env(400, "Invalid input Error", ["The tin no field is required."]))).toBeUndefined();
+    expect(buildLongHelp(einvoice)).toMatch(/tin_no\s+← run ep einvoice verify-access first/);
+    expect(toolDescription(einvoice)).toContain("tin_no: call ep_einvoice_verify_access first");
+  });
+
   it("does not match a longer field name, other statuses, or the target params", () => {
     const order = getOperation("ondemand.order")!;
     expect(matchPrerequisite(order, env(400, "The ondemand_service_id field is required"))?.param).toBe("ondemand_service_id");
-    expect(prerequisiteHint(getOperation("shipment.submit")!, env(400, "The ondemand_service_id is bad"))).toBeUndefined();
-    expect(prerequisiteHint(getOperation("shipment.submit")!, env(500, "service_id broke"))).toBeUndefined();
+    expect(prerequisiteHint(submit, env(400, "The ondemand_service_id is bad"))).toBeUndefined();
+    expect(prerequisiteHint(submit, env(500, "service_id broke"))).toBeUndefined();
     expect(prerequisiteHint(getOperation("account.wallet")!, env(400, "account_id required"))).toBeUndefined();
   });
 });
@@ -182,6 +223,9 @@ describe("exit codes and friendly errors", () => {
       expect(process.exitCode).toBe(ExitCode.VALIDATION);
       const machine = capture(() => reportEnvelope(buildContext({ format: "json" }), failure, undefined, op));
       expect(JSON.parse(machine.out)).toMatchObject({ status_code: 400 });
+      // the chosen format is kept: ndjson stays one compact line
+      const nd = capture(() => reportEnvelope(buildContext({ format: "ndjson" }), failure, undefined, op));
+      expect(nd.out).toBe('"The shipment 0 service_id field is required."\n');
     } finally {
       if (tty) Object.defineProperty(process.stdout, "isTTY", tty);
       else delete (process.stdout as any).isTTY;

@@ -6,30 +6,43 @@ import type { Envelope } from "../core/types";
 // Statuses whose message can name a bad or missing input (validation / not found).
 const HINT_STATUSES = new Set([400, 404, 422]);
 
-/** Every string in a value (depth-limited), for scanning error messages and error fields. */
-function strings(v: unknown, out: string[] = [], depth = 0): string[] {
-  if (depth > 5 || v === null || v === undefined) return out;
-  if (typeof v === "string") out.push(v);
-  else if (Array.isArray(v)) for (const x of v) strings(x, out, depth + 1);
-  else if (typeof v === "object") {
-    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
-      if (k === "input") continue; // echoed request, not an error
-      out.push(k);
-      strings(x, out, depth + 1);
-    }
-  }
-  return out;
+function stringList(v: unknown): string[] {
+  if (typeof v === "string") return [v];
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-/** The text of a failed call: message, error fields and per-item errors. */
+/** A validator map: { field: [messages] } (or { field: "message" }). */
+function isValidatorMap(v: unknown): v is Record<string, string | string[]> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const values = Object.values(v as Record<string, unknown>);
+  return values.length > 0 && values.every((x) => typeof x === "string" || (Array.isArray(x) && x.every((y) => typeof y === "string")));
+}
+
+/**
+ * The text of a failed call: message, error fields, validator maps (keys = field names) and
+ * per-item errors. Echoed request objects are never scanned: their keys (sender.point_code,
+ * receiver, …) are present on every failed shipment and would name the wrong prerequisite.
+ */
 function errorText(env: Envelope): string {
-  const parts = [env.message, (env as Record<string, unknown>).errors, (env as Record<string, unknown>).error];
-  if (effectiveStatus(env) >= 400) parts.push(env.data);
-  for (const e of collectItemErrors(env)) parts.push(e.errors);
-  return strings(parts).join("\n");
+  const raw = env as Record<string, unknown>;
+  const parts: string[] = [];
+  if (typeof env.message === "string") parts.push(env.message);
+  parts.push(...stringList(raw.errors), ...stringList(raw.error));
+  if (isValidatorMap(raw.errors)) for (const [k, v] of Object.entries(raw.errors)) parts.push(k, ...stringList(v));
+  if (effectiveStatus(env) >= 400) {
+    const data = env.data;
+    parts.push(...stringList(data));
+    if (isValidatorMap(data)) for (const [k, v] of Object.entries(data)) parts.push(k, ...stringList(v));
+  }
+  for (const e of collectItemErrors(env)) parts.push(...e.errors);
+  return parts.join("\n");
 }
 
-/** The first edge (target edges excluded: those have their own hints) whose param the error names. */
+/**
+ * The first hintable edge whose param the error names. Not hintable: the target edges (they
+ * have their own hints), edges without a field (a check to run, not a value to copy) and edges
+ * marked `hint: false` (the caller's own values, like an address).
+ */
 export function matchPrerequisite(op: Operation, env: Envelope): Prerequisite | undefined {
   const status = effectiveStatus(env);
   const failed = HINT_STATUSES.has(status) || (status < 400 && collectItemErrors(env).length > 0);
@@ -38,6 +51,7 @@ export function matchPrerequisite(op: Operation, env: Envelope): Prerequisite | 
   if (!text) return undefined;
   for (const edge of prerequisitesOf(op)) {
     if (edge.param === "account_id" || edge.param === "organization_id") continue;
+    if (!edge.field || edge.hint === false) continue;
     const leaf = paramLeaf(edge.param);
     // The API's validator writes field names with spaces ("The shipment number field is
     // required", "shipment 0 service id"), so `_` in the leaf also matches a space. The boundary
