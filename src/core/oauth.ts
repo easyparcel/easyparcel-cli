@@ -539,6 +539,16 @@ export function startLoopbackServer(opts: {
 }
 
 /** Best-effort cross-platform browser opener. */
+/**
+ * Should `ep login --device` open the approval page itself? Yes on a desktop, unless the user said
+ * --no-browser; never when the environment looks headless (SSH, no display): there the code is
+ * meant to be typed on another device, and spawning a browser would hang or fail.
+ */
+export function deviceOpensBrowser(p: { browserFlag?: boolean; headless: boolean }): boolean {
+  if (p.browserFlag === false) return false;
+  return !p.headless;
+}
+
 export function openUrl(url: string): void {
   const platform = process.platform;
   try {

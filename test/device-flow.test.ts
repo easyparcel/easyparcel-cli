@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { interpretDeviceToken, pollForDeviceToken, describeDevice } from "../src/core/oauth";
+import { interpretDeviceToken, pollForDeviceToken, describeDevice, deviceOpensBrowser } from "../src/core/oauth";
 
 const noSleep = () => Promise.resolve();
 
@@ -148,5 +148,19 @@ describe("describeDevice (label on the approval page)", () => {
   });
   it("falls back to the OS alone without a host name", () => {
     expect(describeDevice({ hostname: "", platform: "win32" })).toBe("EasyParcel CLI (Windows)");
+  });
+});
+
+describe("deviceOpensBrowser (ep login --device opens the approval page on a desktop)", () => {
+  it("opens on a desktop by default", () => {
+    expect(deviceOpensBrowser({ headless: false })).toBe(true);
+    expect(deviceOpensBrowser({ browserFlag: true, headless: false })).toBe(true);
+  });
+  it("never opens when headless (SSH / no display), even if asked", () => {
+    expect(deviceOpensBrowser({ headless: true })).toBe(false);
+    expect(deviceOpensBrowser({ browserFlag: true, headless: true })).toBe(false);
+  });
+  it("--no-browser only prints the code", () => {
+    expect(deviceOpensBrowser({ browserFlag: false, headless: false })).toBe(false);
   });
 });

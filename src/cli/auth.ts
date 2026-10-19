@@ -21,6 +21,7 @@ import {
   revokeToken,
   detectHeadless,
   currentHeadlessSignals,
+  deviceOpensBrowser,
 } from "../core/oauth";
 import {
   getProfileCredentials,
@@ -378,7 +379,7 @@ async function withTokenLogin(ctx: RuntimeContext, opts: Record<string, any>): P
 async function deviceLogin(
   ctx: RuntimeContext,
   client: ClientCreds,
-  o: { scope?: string; all: boolean; json: boolean },
+  o: { scope?: string; all: boolean; json: boolean; openBrowser?: boolean },
 ): Promise<void> {
   const da = await requestDeviceAuthorization({
     baseUrl: ctx.baseUrl,
@@ -393,6 +394,12 @@ async function deviceLogin(
   process.stderr.write(`\n  URL:  ${da.verification_uri}\n  Code: ${da.user_code}\n`);
   if (da.verification_uri_complete) {
     process.stderr.write(`\n  Or open directly: ${da.verification_uri_complete}\n`);
+  }
+  // On a desktop, open the approval page ourselves (same opener as the browser flow); the code
+  // stays printed for the cases where the page opens somewhere else or the browser is blocked.
+  if (o.openBrowser && da.verification_uri_complete) {
+    log.info("Opening your browser… if it does not open, use the URL above.");
+    openUrl(da.verification_uri_complete);
   }
   process.stderr.write("\nWaiting for authorization…\n");
   // stdout carries exactly one JSON object (the final result), so the pending notice an
@@ -469,7 +476,12 @@ async function loginAction(opts: Record<string, any>): Promise<void> {
   const useDevice =
     opts.device === true ? true : opts.device === false ? false : detectHeadless(currentHeadlessSignals());
   if (useDevice) {
-    await deviceLogin(ctx, client, { scope, all: Boolean(opts.all), json: jsonMode });
+    await deviceLogin(ctx, client, {
+      scope,
+      all: Boolean(opts.all),
+      json: jsonMode,
+      openBrowser: deviceOpensBrowser({ browserFlag: opts.browser, headless: detectHeadless(currentHeadlessSignals()) }),
+    });
     return;
   }
 
@@ -707,13 +719,13 @@ function attachLoginOptions(cmd: Command): Command {
   return cmd
     .option("--client-id <id>", "Override the built-in OAuth client id")
     .option("--client-secret <secret>", "OAuth client secret (only for confidential/custom apps)")
-    .option("--device", "Use the device authorization grant (RFC 8628); auto-selected when headless/SSH")
+    .option("--device", "Use the device authorization grant (RFC 8628); auto-selected when headless/SSH. Opens the approval page in your browser on a desktop (add --no-browser to only print the code)")
     .option("--no-device", "Force the browser flow even when headless")
     .option("--with-token", "Read a personal access token (epat_) from stdin; never written to disk")
     .option("--no-verify", "Skip the server verification call for --with-token")
     .option("--client-credentials", "Use the client_credentials grant (no browser)")
     .option("--all", "Authorize ALL accounts you belong to and save one profile per account")
-    .option("--no-browser", "Print the URL and paste the redirect code back (headless)")
+    .option("--no-browser", "Never open a browser: browser flow → paste the redirect code back; --device → print the code only")
     .option("--redirect-uri <uri>", "Override the redirect URI (must be registered)")
     .option("--port <port>", `Loopback callback port (default ${DEFAULT_CALLBACK_PORT}, the only port registered for the built-in app; others need --redirect-uri)`)
     .option("--scope <scope>", "OAuth scope (usually empty for this API)")

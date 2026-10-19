@@ -44,8 +44,10 @@ ep auth login
 Your browser opens, you approve, done — tokens are saved in your OS keychain (or a private
 file where there is none). No app registration, no API keys to copy.
 
-No browser on this machine (SSH, a server, a container)? Use the device code — the CLI shows a
-short code, you approve it from any browser, and it picks this up automatically:
+Prefer the device code? The CLI shows a short code and, on a desktop, opens the approval page
+for you (the code stays printed, and `--no-browser` prints it only); on a machine with no
+browser (SSH, a server, a container) you approve it from any other device, and the CLI picks
+the result up automatically:
 ```bash
 ep login --device
 ```
