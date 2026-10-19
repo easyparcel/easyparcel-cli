@@ -1,5 +1,7 @@
 import { loadConfig, DEFAULT_BASE_URL, DEFAULT_API_VERSION, DEFAULT_PROFILE } from "./config";
 import { setLogLevel } from "./logger";
+import { loadStore } from "./credentials";
+import { resolveTarget } from "./target";
 import type { EpConfig, Format } from "./types";
 
 /** Global flags shared by all commands (parsed by commander on the root program). */
@@ -19,6 +21,8 @@ export interface GlobalOptions {
   pageAll?: boolean;
   pageLimit?: string | number;
   pageDelay?: string | number; // ms
+  account?: string;
+  organization?: string;
 }
 
 export interface RuntimeContext {
@@ -38,6 +42,10 @@ export interface RuntimeContext {
   timeoutMs: number;
   retries: number;
   page: { all: boolean; limit?: number; delayMs: number };
+  /** Shipping account to act on (X-Account-Id); flag > env > profile default. */
+  accountId?: string;
+  /** Organization id or 6-letter ref to act on (X-Organization-Id); flag > env > profile default. */
+  organizationId?: string;
 }
 
 let current: RuntimeContext | null = null;
@@ -80,6 +88,14 @@ export function buildContext(opts: GlobalOptions): RuntimeContext {
     ? (opts.format as Format)
     : "json") as Format;
 
+  // Target defaults are non-secret, so the file index is enough (no keychain read here).
+  const target = resolveTarget({
+    flagAccount: opts.account,
+    flagOrganization: opts.organization,
+    env: process.env,
+    profile: loadStore().profiles[profile],
+  });
+
   const ctx: RuntimeContext = {
     config,
     baseUrl: baseUrl.replace(/\/+$/, ""),
@@ -100,6 +116,8 @@ export function buildContext(opts: GlobalOptions): RuntimeContext {
       limit: num(opts.pageLimit),
       delayMs: num(opts.pageDelay) ?? 0,
     },
+    accountId: target.accountId,
+    organizationId: target.organizationId,
   };
   setContext(ctx);
   return ctx;

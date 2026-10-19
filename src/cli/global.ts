@@ -11,6 +11,8 @@ import type { Operation } from "../operations/types";
 export function addGlobalOptions(cmd: Command, opts: { includeColor?: boolean } = {}): Command {
   cmd
     .option("--profile <name>", "Credential profile to use")
+    .option("--account <id>", "Shipping account to act on (X-Account-Id); see `ep account list`")
+    .option("--organization <id>", "Organization id or 6-letter ref to act on (X-Organization-Id); see `ep org list`")
     .option("--base-url <url>", "API base URL")
     .option("--api-version <version>", "API version prefix (e.g. 2026-03)")
     .option("-f, --format <format>", "Output format: json | pretty | table | ndjson | csv")

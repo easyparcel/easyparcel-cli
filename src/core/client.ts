@@ -3,6 +3,7 @@ import { CliError, ExitCode } from "./errors";
 import { log } from "./logger";
 import { userAgent } from "./version";
 import { getValidAccessToken, doRefresh } from "./tokens";
+import { targetHeaders } from "./target";
 import type { RuntimeContext } from "./context";
 import type { Envelope } from "./types";
 
@@ -22,6 +23,13 @@ export interface ApiRequestOptions {
   /** Use this bearer token instead of the stored/profile token (per-request auth,
    *  e.g. the HTTP MCP server serving multiple users). Disables auto-refresh. */
   accessToken?: string;
+  /** Extra request headers (e.g. X-Account-Id from an MCP tool argument or `ep api --header`).
+   *  Applied last, replacing any default header of the same name (case-insensitive). */
+  headers?: Record<string, string>;
+  /** Send the context's target (--account / --organization, env, profile default) as
+   *  X-Account-Id / X-Organization-Id (default true). Never sent with an accessToken override:
+   *  a per-request bearer (hosted MCP) must not inherit this host's defaults. */
+  target?: boolean;
 }
 
 /** Resolve a request path into a full URL, applying the version prefix. */
@@ -118,11 +126,20 @@ export async function apiRequest<T = unknown>(
   const bodyStr = opts.body !== undefined ? JSON.stringify(opts.body) : undefined;
 
   let token = auth ? (opts.accessToken ?? (await getValidAccessToken(ctx))) : undefined;
+  const target =
+    opts.target !== false && !opts.accessToken
+      ? targetHeaders({ accountId: ctx.accountId, organizationId: ctx.organizationId })
+      : {};
 
   const doCall = (tok?: string): Promise<RawResponse> => {
     const headers: Record<string, string> = { Accept: "application/json", "User-Agent": userAgent() };
     if (bodyStr !== undefined) headers["Content-Type"] = "application/json";
     if (tok) headers["Authorization"] = `Bearer ${tok}`;
+    Object.assign(headers, target);
+    for (const [k, v] of Object.entries(opts.headers ?? {})) {
+      for (const existing of Object.keys(headers)) if (existing.toLowerCase() === k.toLowerCase()) delete headers[existing];
+      headers[k] = v;
+    }
     log.debug(`${opts.method} ${url}${bodyStr ? ` body=${truncate(bodyStr)}` : ""}`);
     return rawRequest(url, { method: opts.method, headers, body: bodyStr, timeoutMs: ctx.timeoutMs });
   };
