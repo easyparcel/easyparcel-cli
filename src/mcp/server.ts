@@ -7,6 +7,7 @@ import { executeOperation } from "../cli/run";
 import { collectItemErrors, effectiveStatus } from "../core/envelope";
 import { getContext } from "../core/context";
 import { CliError } from "../core/errors";
+import { targetErrorHint, validateAccountId, validateOrganizationId, ACCOUNT_HEADER, ORGANIZATION_HEADER } from "../core/target";
 import { CLI_VERSION } from "../core/version";
 import { log } from "../core/logger";
 
@@ -25,23 +26,61 @@ const ENVELOPE_OUTPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: true,
 };
 
-function toolInputSchema(op: Operation): Record<string, unknown> {
+// Target parameters every tool accepts. They are popped from the arguments before the request
+// body is built and sent as the X-Account-Id / X-Organization-Id headers instead.
+const TARGET_PROPERTIES: Record<string, unknown> = {
+  account_id: {
+    type: ["string", "number"],
+    description: "Shipping account to act on. List them with ep_account_list.",
+  },
+  organization_id: {
+    type: "string",
+    description: "Organization to act on (id or 6-letter ref). List them with ep_organization_list.",
+  },
+};
+
+export function toolInputSchema(op: Operation): Record<string, unknown> {
   if (op.body === "none") {
-    return { type: "object", properties: {}, additionalProperties: false };
+    return { type: "object", properties: { ...TARGET_PROPERTIES }, additionalProperties: false };
   }
   const base: Record<string, unknown> = op.schema
     ? (structuredClone(op.schema) as Record<string, unknown>)
     : { type: "object", properties: {} };
+  const props = base.properties && typeof base.properties === "object" ? (base.properties as Record<string, unknown>) : {};
+  base.properties = { ...props, ...TARGET_PROPERTIES };
   base.additionalProperties = true; // the API may accept fields beyond our schema
   if (op.example !== undefined) base.examples = [op.example];
   return base;
+}
+
+/**
+ * Split tool arguments into the request body (target params removed) and the target headers.
+ * Throws a CliError (usage) on a malformed account_id / organization_id.
+ */
+export function splitTargetArgs(args: Record<string, unknown>): { rest: Record<string, unknown>; headers: Record<string, string> } {
+  const { account_id, organization_id, ...rest } = args;
+  const headers: Record<string, string> = {};
+  if (account_id !== undefined && account_id !== null && account_id !== "") {
+    headers[ACCOUNT_HEADER] = validateAccountId(account_id, "account_id");
+  }
+  if (organization_id !== undefined && organization_id !== null && organization_id !== "") {
+    headers[ORGANIZATION_HEADER] = validateOrganizationId(organization_id, "organization_id");
+  }
+  return { rest, headers };
+}
+
+export interface BuildServerOptions {
+  /** Called when a token-authed tool call gets an upstream 401 (hosted broker, decision S9). */
+  onUnauthorized?: () => void;
+  /** Test seam: replaces executeOperation. */
+  execute?: typeof executeOperation;
 }
 
 function toolDescription(op: Operation): string {
   const parts = [op.summary + "."];
   if (op.description) parts.push(op.description);
   parts.push(`Endpoint: ${op.method} /open_api/{version}/${op.path}.`);
-  if (op.body !== "none") parts.push("The tool arguments ARE the JSON request body.");
+  if (op.body !== "none") parts.push("The tool arguments ARE the JSON request body (except account_id / organization_id, which pick the target).");
   if (op.pagination) parts.push("Cursor-paginated; pass the cursor field to page.");
   if (op.docNote) parts.push(`Note: ${op.docNote}`);
   if (op.mutating) parts.push("MUTATING: this creates/cancels orders and may charge your wallet.");
@@ -51,11 +90,14 @@ function toolDescription(op: Operation): string {
 /**
  * Build an MCP Server exposing every EasyParcel operation as a tool.
  *
- * @param authToken Optional per-connection bearer token. When set (HTTP transport,
- *   one user per session) every tool call authenticates with this token instead of
- *   the locally stored/profile credentials used by the stdio transport.
+ * @param authToken Optional per-connection bearer token, or a getter returning the session's
+ *   current one. When set (HTTP transport, one user per session) every tool call authenticates
+ *   with it instead of the locally stored/profile credentials used by the stdio transport.
  */
-export function buildServer(authToken?: string): Server {
+export function buildServer(authToken?: string | (() => string | undefined), options: BuildServerOptions = {}): Server {
+  const currentToken = typeof authToken === "function" ? authToken : () => authToken;
+  const tokenAuthed = authToken !== undefined;
+  const execute = options.execute ?? executeOperation;
   const server = new Server(
     { name: "easyparcel", version: CLI_VERSION },
     { capabilities: { tools: {} } },
@@ -86,13 +128,17 @@ export function buildServer(authToken?: string): Server {
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     const ctx = getContext();
     try {
-      const body = op.body === "none" ? undefined : args;
-      const env = await executeOperation(ctx, op, { body, accessToken: authToken });
+      const { rest, headers } = splitTargetArgs(args);
+      const body = op.body === "none" ? undefined : rest;
+      const env = await execute(ctx, op, { body, accessToken: currentToken(), headers });
       const status = effectiveStatus(env);
+      if (tokenAuthed && (env._http_status === 401 || status === 401)) options.onUnauthorized?.();
       const itemErrors = collectItemErrors(env);
       const isError = status >= 400;
       const summaryLines: string[] = [];
       if (isError) summaryLines.push(`API status ${status}${env.message ? `: ${env.message}` : ""}`);
+      const hint = isError ? targetErrorHint(env, "mcp") : undefined;
+      if (hint) summaryLines.push(hint.message);
       if (itemErrors.length) {
         summaryLines.push(`${itemErrors.length} batch item(s) failed:`);
         for (const e of itemErrors) summaryLines.push(`  - item ${e.index}: ${e.errors.join("; ")}`);
