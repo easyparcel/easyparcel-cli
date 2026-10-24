@@ -1,6 +1,6 @@
 {
   "name": "@easyparcel/cli",
-  "version": "0.1.10",
+  "version": "0.1.13",
   "description": "EasyParcel CLI — a comprehensive command-line interface for the EasyParcel Open API, built for humans and AI agents.",
   "type": "module",
   "bin": {

@@ -1,6 +1,8 @@
 # Second MCP source: Claude connector. Identical to the ChatGPT deployment but with its
 # OWN EasyParcel client id and its own public hostname, so EasyParcel attributes/revokes
-# Claude traffic independently. Apply with:  kubectl apply -f deploy/k8s/claude-deployment.yaml
+# Claude traffic independently.
+# First deploy only:  kubectl apply -f deploy/k8s/claude-deployment.yaml. On a running deployment
+# use kubectl set env / set image instead (deploy/README.md "Changing a live deployment").
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -21,7 +23,7 @@ spec:
     spec:
       containers:
         - name: mcp
-          image: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp:0.1.10
+          image: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp:0.1.12
           imagePullPolicy: IfNotPresent
           args:
             - mcp

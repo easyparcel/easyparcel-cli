@@ -2,7 +2,7 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { getMcpOperations } from "./operations";
+import { getMcpOperations, missingTargetListingsWarning } from "./operations";
 import { buildServer } from "./server";
 import { createOAuthProxy, DEFAULT_TRUSTED_REDIRECT_HOSTS, type OAuthProxy } from "./oauth";
 import { createOAuthStore, seedOAuthClients, type OAuthStore } from "./store";
@@ -139,6 +139,8 @@ export async function startHttpMcpServer(opts: HttpMcpOptions): Promise<HttpMcpS
   const invalidSessions = new Map<string, string | undefined>();
   const endpoint = opts.path.startsWith("/") ? opts.path : `/${opts.path}`;
   const mcpOperations = getMcpOperations();
+  const listingWarning = missingTargetListingsWarning(mcpOperations);
+  if (listingWarning) log.warn(listingWarning);
   const requireAuth = opts.requireAuth || opts.oauth;
 
   // Per-source attribution: the upstream EasyParcel client this proxy authenticates as.

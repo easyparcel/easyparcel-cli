@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 # EasyParcel MCP server — container image for the HTTP/OAuth transport.
 #
-#   docker build -t <registry>/easyparcel-mcp:0.1.3 .
-#   docker run -p 8790:8790 <registry>/easyparcel-mcp:0.1.3 \
+#   docker build -t <registry>/easyparcel-mcp:<new-tag> .
+#   docker run -p 8790:8790 <registry>/easyparcel-mcp:<new-tag> \
 #       mcp --http --host 0.0.0.0 --port 8790 --oauth --public-url https://mcp.easyparcel.com
 #
 # The default CMD runs the HTTP MCP server; k8s overrides `args` (see deploy/k8s).

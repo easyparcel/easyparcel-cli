@@ -207,8 +207,11 @@ own defaults never apply to a client's token.
 **Narrow the tool surface** with `EP_MCP_ALLOWED_OPERATIONS`, a comma-separated list of
 operation ids or tool names (see `ep describe`). Unset means every operation. The hosted
 ChatGPT broker, for example, runs with the read-only set
-`shipment.quote,shipment.list,shipment.details,shipment.track,shipment.insurance-quote,courier.list,courier.dropoff-points`.
-An unknown name stops the server at startup instead of silently exposing everything.
+`shipment.quote,shipment.list,shipment.details,shipment.track,shipment.insurance-quote,courier.list,courier.dropoff-points,account.list`;
+`account.list` is how an "All my shipping accounts" sign-in finds the `account_id` the other tools take.
+An unknown name stops the server at startup instead of silently exposing everything. The list is
+exact: if it exposes account-scoped tools without `account.list` (or organization-scoped ones
+without `organization.list`), the server still starts and logs a warning, but adds nothing.
 
 ---
 

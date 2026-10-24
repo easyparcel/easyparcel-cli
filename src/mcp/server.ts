@@ -2,7 +2,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { mcpToolName, mcpPrerequisiteText } from "../operations";
-import { getMcpOperations } from "./operations";
+import { getMcpOperations, missingTargetListingsWarning } from "./operations";
 import type { Operation } from "../operations/types";
 import { executeOperation } from "../cli/run";
 import { prerequisiteHint } from "../cli/hints";
@@ -169,6 +169,8 @@ export function buildServer(authToken?: string | (() => string | undefined), opt
 
 export async function runMcpServer(): Promise<void> {
   const operations = getMcpOperations();
+  const listingWarning = missingTargetListingsWarning(operations);
+  if (listingWarning) log.warn(listingWarning);
   const server = buildServer(undefined, { operations });
   const transport = new StdioServerTransport();
   await server.connect(transport);

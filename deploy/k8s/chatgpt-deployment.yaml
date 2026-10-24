@@ -1,6 +1,7 @@
 # MCP source: ChatGPT connector. Its own EasyParcel client id + hostname so EasyParcel
 # attributes/revokes ChatGPT traffic independently.
-# Apply with:  kubectl apply -f deploy/k8s/chatgpt-deployment.yaml
+# First deploy only:  kubectl apply -f deploy/k8s/chatgpt-deployment.yaml. On a running deployment
+# use kubectl set env / set image instead (deploy/README.md "Changing a live deployment").
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -21,7 +22,7 @@ spec:
     spec:
       containers:
         - name: mcp
-          image: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp:0.1.10
+          image: easyparcel-registry-vpc.ap-southeast-3.cr.aliyuncs.com/easyparcel-production/easyparcel-mcp:0.1.12
           imagePullPolicy: IfNotPresent
           args:
             - mcp
@@ -41,9 +42,10 @@ spec:
             # since-replaced pod) so it authorizes without remove + re-add. redirect_uri must match
             # exactly what ChatGPT sends to /authorize; update if the connector is recreated.
             # Read-only tool surface for the ChatGPT connector (no booking/cancel). Operation ids or
-            # tool names, comma-separated; unknown names fail startup. Matches production since image 0.1.11.
+            # tool names, comma-separated; unknown names fail startup. account.list is how an
+            # "All my shipping accounts" sign-in learns the account_id every other tool needs.
             - name: EP_MCP_ALLOWED_OPERATIONS
-              value: shipment.quote,shipment.list,shipment.details,shipment.track,shipment.insurance-quote,courier.list,courier.dropoff-points
+              value: shipment.quote,shipment.list,shipment.details,shipment.track,shipment.insurance-quote,courier.list,courier.dropoff-points,account.list
             - name: EP_MCP_SEED_CLIENTS
               value: '[{"client_id":"r3em8jm0a8vlpreS4u918jdP5YlS0xCZ","redirect_uris":["https://chatgpt.com/connector/oauth/AWx1IV2OseXF"],"client_name":"ChatGPT (seeded)"}]'
           ports:
