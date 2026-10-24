@@ -8,7 +8,7 @@
 # The default CMD runs the HTTP MCP server; k8s overrides `args` (see deploy/k8s).
 
 # ---- build (needs devDeps: tsup, typescript) ----
-FROM node:22-alpine AS build
+FROM node:22.23.4-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --ignore-scripts
@@ -16,14 +16,14 @@ COPY . .
 RUN npm run build
 
 # ---- production dependencies only ----
-FROM node:22-alpine AS deps
+FROM node:22.23.4-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 # --ignore-scripts skips the postinstall native-binary download (not needed in the container).
 RUN npm ci --omit=dev --ignore-scripts
 
 # ---- runtime ----
-FROM node:22-alpine AS runtime
+FROM node:22.23.4-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup -S app && adduser -S app -G app
