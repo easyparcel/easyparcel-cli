@@ -36,7 +36,7 @@ function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
     let size = 0;
     req.on("data", (c: Buffer) => {
       size += c.length;
-      if (size > 8 * 1024 * 1024) {
+      if (size > 1024 * 1024) {
         reject(new Error("request body too large"));
         req.destroy();
         return;
