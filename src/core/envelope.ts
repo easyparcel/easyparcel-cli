@@ -2,6 +2,8 @@ import type { Envelope } from "./types";
 
 export interface ItemError {
   index: number;
+  /** Where the item sits, e.g. "2" or "0.shipments[1]" for a submit_orders shipment. */
+  label?: string;
   status?: string;
   errors: string[];
   input?: unknown;
@@ -25,14 +27,15 @@ function normalizeErrors(e: unknown): string[] {
  * EasyParcel batch endpoints (quotations, submit_orders, cancel, tracking,
  * insurance) return HTTP 200 even when individual items fail. Each element
  * carries a `status` ("success" | "error" | "not_found") and/or an `errors`
- * array. This surfaces those so the runner can warn / set an exit code.
+ * array. submit_orders nests them one level down, at data[].shipments[]. This
+ * surfaces those so the runner can warn / set an exit code.
  */
 export function collectItemErrors(env: Envelope): ItemError[] {
   const out: ItemError[] = [];
   const data: unknown = env.data;
   if (!Array.isArray(data)) return out;
 
-  data.forEach((item, index) => {
+  const check = (item: unknown, index: number, label: string) => {
     if (!item || typeof item !== "object") return;
     const obj = item as Record<string, unknown>;
     const status = typeof obj.status === "string" ? obj.status : undefined;
@@ -41,11 +44,18 @@ export function collectItemErrors(env: Envelope): ItemError[] {
     if (failed) {
       out.push({
         index,
+        label,
         status,
         errors: errs.length ? errs : obj.message ? [String(obj.message)] : [],
         input: obj.input,
       });
     }
+  };
+
+  data.forEach((item, index) => {
+    check(item, index, String(index));
+    const nested = item && typeof item === "object" ? (item as Record<string, unknown>).shipments : undefined;
+    if (Array.isArray(nested)) nested.forEach((s, j) => check(s, j, `${index}.shipments[${j}]`));
   });
   return out;
 }

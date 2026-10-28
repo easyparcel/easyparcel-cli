@@ -28,6 +28,21 @@ export interface ProfileCredentials {
   scope?: string;
   /** Human label for the connected account (best-effort). */
   account_label?: string;
+  /** The shipping account this profile's token is bound to (from the token itself). */
+  account_id?: number | string;
+  /** True when the login covers all the person's accounts (identity token): the target is named per call. */
+  identity?: boolean;
+  /** Account sent as X-Account-Id when no --account flag / EASYPARCEL_ACCOUNT_ID is given (`ep account use`). */
+  default_account_id?: number | string;
+  /** Organization id or ref sent as X-Organization-Id by default (`ep org use`). */
+  default_organization_id?: string;
+  /**
+   * Internal marker: which backend holds this profile's secret fields.
+   * "keychain" → access/refresh/client_secret live in the OS keychain and are
+   * absent from the file index. "file" (or undefined, legacy) → everything is in
+   * the 0600 credentials.json. Stripped before credentials are returned to callers.
+   */
+  storage?: "keychain" | "file";
 }
 
 export interface CredentialStore {

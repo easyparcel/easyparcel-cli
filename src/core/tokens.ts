@@ -1,4 +1,4 @@
-import { getProfileCredentials, setProfileCredentials } from "./credentials";
+import { getProfileCredentials, setProfileCredentials, hasEnvAccessToken } from "./credentials";
 import { refreshToken } from "./oauth";
 import { CliError, ExitCode } from "./errors";
 import { log } from "./logger";
@@ -6,6 +6,10 @@ import type { RuntimeContext } from "./context";
 import type { ProfileCredentials, TokenResponse } from "./types";
 
 const SKEW_MS = 30_000;
+
+/** What to run when there is no usable session (names both sign-in flows). */
+export const SIGNED_OUT_MESSAGE =
+  "Not signed in. Run `ep login` (browser) or `ep login --device` (a code you approve on any device), or set EASYPARCEL_ACCESS_TOKEN.";
 
 /** True when the access token is known to be expired (or about to). */
 export function isExpired(expiresAt?: string): boolean {
@@ -32,19 +36,19 @@ export function tokensFromResponse(tr: TokenResponse, extra?: Partial<ProfileCre
 }
 
 /**
- * Persist tokens to disk, UNLESS the user is in pure env-injection mode
- * (EASYPARCEL_ACCESS_TOKEN set) — in that case the agent/CI owns the tokens
- * and we never write to disk.
+ * Persist tokens, UNLESS the user is in pure env-injection mode
+ * (EASYPARCEL_ACCESS_TOKEN / EASYPARCEL_TOKEN set) — in that case the agent/CI
+ * owns the tokens and we never write them to the keychain or disk.
  */
 export function maybePersist(ctx: RuntimeContext, creds: ProfileCredentials): void {
-  if (process.env.EASYPARCEL_ACCESS_TOKEN) return;
+  if (hasEnvAccessToken()) return;
   setProfileCredentials(ctx.profile, creds);
 }
 
 export async function getValidAccessToken(ctx: RuntimeContext): Promise<string> {
   const creds = getProfileCredentials(ctx.profile);
   if (!creds.access_token && !creds.refresh_token) {
-    throw new CliError("Not authenticated. Run `ep auth login`, or set EASYPARCEL_ACCESS_TOKEN.", ExitCode.AUTH);
+    throw new CliError(SIGNED_OUT_MESSAGE, ExitCode.AUTH);
   }
   if (creds.access_token && !isExpired(creds.expires_at)) return creds.access_token;
   if (creds.refresh_token) {
@@ -52,7 +56,7 @@ export async function getValidAccessToken(ctx: RuntimeContext): Promise<string> 
     if (tok) return tok;
   }
   if (creds.access_token) return creds.access_token; // last resort; may be valid
-  throw new CliError("No usable access token. Run `ep auth login`.", ExitCode.AUTH);
+  throw new CliError(`The session has no usable access token. ${SIGNED_OUT_MESSAGE.replace(/^Not signed in\. /, "")}`, ExitCode.AUTH);
 }
 
 /** Attempt a refresh; returns the new access token or undefined on failure. */

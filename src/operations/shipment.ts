@@ -1,4 +1,10 @@
 import { type Operation, str, num, bool, arr, obj, addressSchema } from "./types";
+
+/** `ep shipment parcel-categories` rows: id → name (used as parcel_category_id for DDP). */
+function parcelCategoryRows(data: unknown): Record<string, unknown>[] {
+  const list = Array.isArray(data) ? data : [];
+  return list.map((c: any) => ({ ID: c?.id ?? "", NAME: c?.name ?? "" }));
+}
 import type { Envelope } from "../core/types";
 
 function paginationCursor(field: "next_shipment_number" | "next_booking_number") {
@@ -58,7 +64,7 @@ export const shipmentOperations: Operation[] = [
               height: num("cm"),
               length: num("cm"),
               parcel_value: num("Declared value (for insurance/DDP)"),
-              parcel_category_id: num("From `ep ... parcel-category list` (DDP)"),
+              parcel_category_id: num("From `ep shipment parcel-categories` (DDP)"),
             },
             ["sender", "receiver", "weight"],
           ),
@@ -76,6 +82,15 @@ export const shipmentOperations: Operation[] = [
         },
       ],
     },
+    prerequisites: [
+      {
+        param: "shipment[].parcel_category_id",
+        from: "shipment.parcel-categories",
+        field: "[].id",
+        when: "international DDP quotes",
+      },
+    ],
+    provides: ["[].quotations[].courier.service_id", "[].quotations[].courier.courier_id"],
     examples: [
       `ep quote --data '{"shipment":[{"sender":{"postcode":"11950","country":"MY"},"receiver":{"postcode":"55100","country":"MY"},"weight":1}]}'`,
       `ep +rates --from 11950 --to 55100 --weight 1   # shortcut`,
@@ -94,7 +109,9 @@ export const shipmentOperations: Operation[] = [
     body: "json",
     bodyRequired: true,
     docNote: "GET-with-body endpoint. The CLI sends the JSON body on a GET request.",
-    schema: obj({ shipment: arr(obj({}), "Same shape as submit-orders shipment[].") }, ["shipment"]),
+    schema: obj({ shipment: arr(obj({ service_id: str("From `ep shipment quote`") }), "Same shape as submit-orders shipment[].") }, ["shipment"]),
+    prerequisites: [{ param: "shipment[].service_id", from: "shipment.quote", field: "[].quotations[].courier.service_id" }],
+    provides: ["coupons[].coupon_code"],
   },
 
   {
@@ -113,12 +130,12 @@ export const shipmentOperations: Operation[] = [
     bodyRequired: true,
     schema: obj(
       {
-        coupon_codes: arr(str(), "Optional coupon codes to apply."),
+        coupon_codes: arr(str(), "Optional coupon codes to apply (from `ep shipment coupon-list`)."),
         shipment: arr(
           obj(
             {
               reference: str("Your reference"),
-              service_id: str("From a quotation, e.g. EP-CS0XXXXXX"),
+              service_id: str("From `ep shipment quote` (quotations[].courier.service_id), e.g. EP-CS0XXXXXX"),
               collection_date: str("YYYY-MM-DD"),
               customer_reference_no: str(),
               weight: num("kg"),
@@ -129,13 +146,14 @@ export const shipmentOperations: Operation[] = [
               sender: addressSchema,
               receiver: addressSchema,
               // Drop-off (vs pickup) is selected via sender/receiver.point_code (see addressSchema),
-              // NOT a top-level field. Insurance is feature.add_on_easy_cover or an insurance[] array.
+              // NOT a top-level field. Insurance is feature.add_on_easy_cover: API 2026-03 replaces any
+              // insurance[] sent here with the courier's mandatory cover plus EasyCover.
               insurance: arr(
                 obj(
                   { insurance_service_id: str("From `ep shipment insurance-quote`"), charge_amount: num(), currency_code: str() },
                   ["insurance_service_id"],
                 ),
-                "Optional EasyCover insurance per shipment.",
+                "Ignored by API 2026-03 (insurance is set from the courier's mandatory cover plus feature.add_on_easy_cover).",
               ),
               feature: obj({
                 add_on_easy_cover: bool("Add EasyCover insurance to this shipment"),
@@ -169,6 +187,28 @@ export const shipmentOperations: Operation[] = [
         },
       ],
     },
+    prerequisites: [
+      { param: "shipment[].service_id", from: "shipment.quote", field: "[].quotations[].courier.service_id", note: "Quote the same route and weight first; the service id picks courier and price." },
+      { param: "coupon_codes", from: "shipment.coupon-list", field: "coupons[].coupon_code", when: "paying with a coupon" },
+      {
+        param: "shipment[].feature.add_on_easy_cover",
+        from: "shipment.insurance-quote",
+        when: "adding EasyCover insurance",
+        note: "Set it to true; the insurance quote only shows the price, and an insurance[] list in the body is ignored.",
+        hint: false,
+      },
+      { param: "shipment[].sender.point_code", from: "courier.dropoff-points", field: "[].point_id", when: "dropping the parcel off instead of a pickup" },
+      { param: "shipment[].feature.courier_ddp.parcel_category_id", from: "shipment.parcel-categories", field: "[].id", when: "international DDP" },
+      {
+        param: "shipment[].receiver",
+        from: "address.search",
+        field: "[]",
+        when: "shipping to a saved address",
+        note: "Map address1 → address_1, province_code → subdivision_code, phone_country_code → phone_number_country_code.",
+        hint: false,
+      },
+    ],
+    provides: ["[].order_number", "[].shipments[].shipment_number", "[].shipments[].awb_number"],
   },
 
   {
@@ -191,6 +231,7 @@ export const shipmentOperations: Operation[] = [
     }),
     pagination: { cursorField: "before_shipment_number", nextCursor: paginationCursor("next_shipment_number") },
     example: { limit: 20 },
+    provides: ["[].shipment_number", "[].awb_number"],
   },
 
   {
@@ -204,6 +245,11 @@ export const shipmentOperations: Operation[] = [
     bodyRequired: true,
     schema: obj({ shipment_number: str("e.g. ES-2606-XXXXX") }, ["shipment_number"]),
     example: { shipment_number: "ES-2606-00001" },
+    prerequisites: [
+      { param: "shipment_number", from: "shipment.list", field: "[].shipment_number" },
+      { param: "shipment_number", from: "shipment.submit", field: "[].shipments[].shipment_number", when: "just booked" },
+    ],
+    provides: ["[].shipment_details.awb_number"],
   },
 
   {
@@ -223,6 +269,10 @@ export const shipmentOperations: Operation[] = [
       ["cancel_list"],
     ),
     example: { cancel_list: [{ shipment_number: "ES-2606-00001", remark: "Customer changed mind" }] },
+    prerequisites: [
+      { param: "cancel_list[].shipment_number", from: "shipment.list", field: "[].shipment_number" },
+      { param: "cancel_list[].shipment_number", from: "shipment.submit", field: "[].shipments[].shipment_number", when: "just booked" },
+    ],
   },
 
   {
@@ -239,6 +289,11 @@ export const shipmentOperations: Operation[] = [
     bodyRequired: true,
     schema: obj({ awb_numbers: arr(str(), "Up to 50 AWB numbers") }, ["awb_numbers"]),
     example: { awb_numbers: ["EP1234567890"] },
+    prerequisites: [
+      { param: "awb_numbers", from: "shipment.list", field: "[].awb_number" },
+      { param: "awb_numbers", from: "shipment.submit", field: "[].shipments[].awb_number", when: "just booked" },
+      { param: "awb_numbers", from: "shipment.details", field: "[].shipment_details.awb_number", when: "you only have the shipment number" },
+    ],
     examples: [`ep track --data '{"awb_numbers":["EP1234567890"]}'`, `ep +track EP1234567890 EP0987654321   # shortcut`],
   },
 
@@ -257,6 +312,7 @@ export const shipmentOperations: Operation[] = [
           obj(
             {
               courier_id: str(),
+              courier_service_id: str("Optional: the quoted service id, from `ep shipment quote`"),
               currency_code: str(),
               from_postcode: str(),
               from_country: str("ISO alpha-2"),
@@ -285,5 +341,52 @@ export const shipmentOperations: Operation[] = [
         },
       ],
     },
+    prerequisites: [
+      { param: "list[].courier_id", from: "shipment.quote", field: "[].quotations[].courier.courier_id" },
+      { param: "list[].courier_id", from: "courier.list", field: "[].courier_id" },
+      { param: "list[].courier_service_id", from: "shipment.quote", field: "[].quotations[].courier.service_id" },
+    ],
+    provides: ["[].insurance_quotations[].insurance_service_id"],
+  },
+
+  {
+    id: "shipment.parcel-categories",
+    group: "shipment",
+    command: "parcel-categories",
+    aliases: ["parcel-category-list"],
+    summary: "List parcel categories (ids for DDP quotes and orders)",
+    description:
+      "Returns { id, name } per parcel category. Use the id as shipment[].parcel_category_id when quoting and as feature.courier_ddp.parcel_category_id when submitting a DDP shipment.",
+    method: "GET",
+    path: "parcel_category/list",
+    body: "none",
+    provides: ["[].id"],
+    humanTable: { columns: ["ID", "NAME"], rows: parcelCategoryRows },
+  },
+
+  {
+    id: "shipment.bulk-awbs",
+    group: "shipment",
+    command: "bulk-awbs",
+    summary: "Generate one consignment-note PDF for several AWBs (returns the file URL)",
+    description:
+      "Merges the consignment notes of your own shipments into one PDF and returns its URL in `data`. AWBs of other accounts are skipped; none found → 400 \"Awb not found\".",
+    method: "GET",
+    path: "shipment/bulk_awbs",
+    body: "json",
+    bodyRequired: true,
+    docNote: "GET-with-body endpoint. The CLI sends the JSON body on a GET request.",
+    schema: obj(
+      {
+        awb: arr(str(), "AWB numbers (from `ep shipment list` / `ep shipment submit`)"),
+        awb_rename: { type: "object", additionalProperties: { type: "string" }, description: "Optional { <awb>: <file label> } map" },
+      },
+      ["awb"],
+    ),
+    example: { awb: ["EP1234567890", "EP0987654321"] },
+    prerequisites: [
+      { param: "awb", from: "shipment.list", field: "[].awb_number" },
+      { param: "awb", from: "shipment.submit", field: "[].shipments[].awb_number", when: "just booked" },
+    ],
   },
 ];

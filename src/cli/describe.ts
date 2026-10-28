@@ -1,9 +1,38 @@
 import { Command } from "commander";
-import { OPERATIONS, getOperation, mcpToolName, GROUP_SUMMARY } from "../operations";
+import { OPERATIONS, getOperation, mcpToolName, GROUP_SUMMARY, prerequisitesOf, cliCommand, targetScope } from "../operations";
+import type { Operation } from "../operations/types";
+import { ExitCode as Codes } from "../core/errors";
 import { getContext } from "../core/context";
 import { addGlobalOptions } from "./global";
 import { printJson } from "../core/output";
 import { CliError, ExitCode } from "../core/errors";
+
+/** The prerequisite edges as `ep describe` prints them (with the CLI command of each source). */
+export function describePrerequisites(op: Operation): Array<Record<string, unknown>> {
+  return prerequisitesOf(op).map((e) => ({
+    param: e.param,
+    from: e.from,
+    from_command: cliCommand(e.from),
+    from_mcp_tool: getOperation(e.from) ? mcpToolName(getOperation(e.from)!) : null,
+    field: e.field ?? null,
+    when: e.when ?? null,
+    note: e.note ?? null,
+  }));
+}
+
+/** The documented exit codes, for scripts and agents. */
+export const EXIT_CODES: Record<string, string> = {
+  [Codes.OK]: "ok",
+  [Codes.GENERIC]: "unexpected error",
+  [Codes.USAGE]: "usage error (bad flag, missing --data, target needed)",
+  [Codes.AUTH]: "not signed in / token rejected (401)",
+  [Codes.NOT_FOUND]: "not found (404)",
+  [Codes.VALIDATION]: "bad input (400)",
+  [Codes.RATE_LIMITED]: "rate limited (429)",
+  [Codes.ITEM_ERRORS]: "batch item errors (--fail-on-item-error)",
+  [Codes.NETWORK]: "network error / timeout",
+  [Codes.FORBIDDEN]: "signed in but not allowed (403: scope, owner-only or another account)",
+};
 
 /**
  * Machine-readable catalog so AI agents can introspect every operation,
@@ -22,6 +51,7 @@ export function registerDescribe(program: Command): void {
           api_version: ctx.apiVersion,
           base_url: ctx.baseUrl,
           groups: GROUP_SUMMARY,
+          exit_codes: EXIT_CODES,
           operations: OPERATIONS.map((o) => ({
             id: o.id,
             group: o.group,
@@ -35,6 +65,8 @@ export function registerDescribe(program: Command): void {
             paginated: Boolean(o.pagination),
             summary: o.summary,
             mcp_tool: mcpToolName(o),
+            target: targetScope(o) ?? null,
+            prerequisites: describePrerequisites(o),
           })),
         });
         return;
@@ -63,6 +95,9 @@ export function registerDescribe(program: Command): void {
         example: op.example ?? null,
         examples: op.examples ?? [],
         mcp_tool: mcpToolName(op),
+        target: targetScope(op) ?? null,
+        prerequisites: describePrerequisites(op),
+        provides: op.provides ?? [],
       });
     });
 

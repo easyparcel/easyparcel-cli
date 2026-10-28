@@ -66,5 +66,12 @@ export const einvoiceOperations: Operation[] = [
       },
       ["tin_no", "id_no", "id_type", "company_name", "company_phone", "msic_code", "business_nature", "address_line_1", "city", "postcode", "state_code", "bulk"],
     ),
+    prerequisites: [
+      {
+        param: "tin_no",
+        from: "einvoice.verify-access",
+        note: "Use the same tin_no / id_no / id_type; it fails until EasyParcel is your intermediary on the MyInvois portal.",
+      },
+    ],
   },
 ];

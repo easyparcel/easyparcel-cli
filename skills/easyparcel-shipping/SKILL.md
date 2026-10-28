@@ -22,9 +22,10 @@ The response lists `quotations[]` per shipment; each has `courier.service_id`, `
 
 ### 2. (Optional) Coupons, insurance, drop-off
 - Coupons for a prospective shipment: `ep shipment coupon-list --data @order.json` → apply by adding `"coupon_codes": ["CODE"]` to the submit body.
-- Insurance pricing: `ep shipment insurance-quote --data @ins.json` → take `insurance_service_id` and add it to the submit body.
+- Insurance pricing: `ep shipment insurance-quote --data @ins.json` shows the price only. To insure a shipment set `feature.add_on_easy_cover: true` in the submit body; an `insurance[]` list there is ignored (the API adds the courier's mandatory cover plus EasyCover).
 - Couriers for a country: `ep courier list --data '{"country_code":"MY"}'`.
-- Drop-off points: `ep courier dropoff-points --data @dropoff.json` → use `point_id` as `dropoff_point_id` and set `"collection_method":"dropoff"`.
+- Drop-off points: `ep courier dropoff-points --data @dropoff.json` (courier_id from `ep courier list` or the quote) → put the `point_id` in `sender.point_code` to drop the parcel off instead of a pickup.
+- Parcel categories (DDP): `ep shipment parcel-categories` → `id` is the `parcel_category_id`.
 
 ### 3. Submit the order (MUTATING — spends wallet credit)
 Always preview first:
@@ -48,6 +49,7 @@ ep +ship --service-id EP-CS0XXXX --collection-date 2026-06-10 --weight 1 \
 - List (newest first, paginated): `ep shipment list --data '{"limit":20}'`  ·  all pages: `ep shipment list --page-all --data '{"limit":250}'`
 - Details: `ep shipment details --data '{"shipment_number":"ES-2606-00001"}'`
 - Cancel (MUTATING, bulk): `ep shipment cancel --dry-run --data @cancel.json` then without `--dry-run`. Only allowed within 7 days of collection date and before pickup; refunds to credit wallet.
+- One PDF of consignment notes for several AWBs: `ep shipment bulk-awbs --data '{"awb":["EP123…","EP456…"]}'` → `data` is the file URL.
 
 ## Tips
 - DDP (international duties prepaid): add `parcel_category_id` to quote items and `feature.courier_ddp.{enable,parcel_category_id}` when submitting.

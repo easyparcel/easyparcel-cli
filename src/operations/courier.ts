@@ -15,6 +15,7 @@ export const courierOperations: Operation[] = [
     schema: obj({ country_code: str("Optional ISO 3166-1 alpha-2 filter, e.g. MY or SG") }),
     example: { country_code: "MY" },
     examples: [`ep courier list --data '{"country_code":"MY"}'`],
+    provides: ["[].courier_id"],
   },
   {
     id: "courier.dropoff-points",
@@ -36,5 +37,10 @@ export const courierOperations: Operation[] = [
       ["courier_id", "country_code"],
     ),
     example: { courier_id: "EP-CR0XXXX", country_code: "MY", postcode: "11950", city: "Penang", state_code: "MY-07" },
+    prerequisites: [
+      { param: "courier_id", from: "courier.list", field: "[].courier_id" },
+      { param: "courier_id", from: "shipment.quote", field: "[].quotations[].courier.courier_id", when: "the courier of a quoted service" },
+    ],
+    provides: ["[].point_id"],
   },
 ];
