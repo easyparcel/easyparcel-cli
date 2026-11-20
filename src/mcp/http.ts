@@ -105,6 +105,19 @@ export function invalidTokenChallenge(resourceMetadataUrl?: string): string {
     : 'Bearer realm="easyparcel", error="invalid_token"';
 }
 
+export const MUSE_CHALLENGES_ENV = "EP_MCP_MUSE_CHALLENGES";
+const MUSE_CHALLENGE_PREFIX = "/.well-known/muse-challenge/";
+
+/** Parse EP_MCP_MUSE_CHALLENGES (comma/space-separated hex tokens) into the set to serve. */
+export function museChallengeTokens(raw: string | undefined): Set<string> {
+  return new Set(
+    (raw ?? "")
+      .split(/[\s,]+/)
+      .map((t) => t.trim())
+      .filter((t) => /^[A-Za-z0-9_-]{16,128}$/.test(t)),
+  );
+}
+
 export interface HttpMcpServerHandle {
   server: http.Server;
   /** The bound port (useful with port 0). */
@@ -213,6 +226,21 @@ export async function startHttpMcpServer(opts: HttpMcpOptions): Promise<HttpMcpS
     }
 
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+
+    // Connector-directory domain verification (Anthropic "Muse"): serve
+    // /.well-known/muse-challenge/<token> as plain `muse-challenge=<token>` for each token
+    // listed in EP_MCP_MUSE_CHALLENGES. Public, no auth, no redirect.
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname.startsWith(MUSE_CHALLENGE_PREFIX)) {
+      const token = url.pathname.slice(MUSE_CHALLENGE_PREFIX.length);
+      if (museChallengeTokens(process.env[MUSE_CHALLENGES_ENV]).has(token)) {
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+        res.end(req.method === "HEAD" ? undefined : `muse-challenge=${token}\n`);
+      } else {
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Not found\n");
+      }
+      return;
+    }
 
     // OAuth 2.1 discovery / authorize / token / register (for ChatGPT connectors).
     if (oauth && (await oauth.tryHandle(req, res, url, publicBaseFor(req)))) return;
