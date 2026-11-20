@@ -119,3 +119,16 @@ on `/authorize` until they re-registered. Redis makes registrations durable acro
 Streamable-HTTP sessions are held per-pod in memory (the `sessions` map in `src/mcp/http.ts`),
 so raising `replicas` also requires **ingress session affinity** (sticky sessions keyed on
 `Mcp-Session-Id`/cookie) — otherwise a session opened on one pod 404s on another.
+
+## Connector-directory domain verification (`/.well-known/muse-challenge/<token>`)
+
+The connector submission form asks for `https://mcp.easyparcel.com/.well-known/muse-challenge/<token>`
+to return HTTP 200 with the plain-text body `muse-challenge=<token>`. The server serves every token
+listed (comma- or space-separated) in `EP_MCP_MUSE_CHALLENGES`; anything else under that path 404s.
+No rebuild is needed for a new challenge, only an env change on the deployment behind the host:
+
+```bash
+kubectl -n default set env deployment/easyparcel-mcp -c mcp EP_MCP_MUSE_CHALLENGES=<token>
+kubectl -n default rollout status deploy/easyparcel-mcp
+curl -i https://mcp.easyparcel.com/.well-known/muse-challenge/<token>
+```
